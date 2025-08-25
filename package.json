@@ -1,0 +1,16 @@
+{
+  "name": "simple-js-hello-world",
+  "version": "1.0.0",
+  "description": "シンプルなJavaScript Hello World実装",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "keywords": [
+    "javascript",
+    "hello-world",
+    "node"
+  ],
+  "author": "",
+  "license": "MIT"
+}
