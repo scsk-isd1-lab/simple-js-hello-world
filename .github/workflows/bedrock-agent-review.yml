@@ -64,6 +64,16 @@ jobs:
 
             ### 全体サマリー
             - 総評（問題がなければ「問題ありません」）。
+
+            ### Issue 用メタデータ（自動改善フロー連携）
+            次のフォーマットで記載。Issue本文にそのまま貼ること。
+            ```improve-meta
+            pr_number: ${{ github.event.pull_request.number }}
+            pr_url: ${{ github.event.pull_request.html_url }}
+            head_ref: ${{ github.event.pull_request.head.ref }}
+            base_ref: ${{ github.event.pull_request.base.ref }}
+            same_repo: true
+            ```
           debug: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
