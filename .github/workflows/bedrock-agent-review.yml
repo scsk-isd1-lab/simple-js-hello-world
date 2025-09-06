@@ -1,15 +1,14 @@
 name: Bedrock Agent Review
 
 on:
-  pull_request_review_comment:
-    types: [created]
-  pull_request_review:
-    types: [submitted]
+  issue_comment:
+    types: [created, deleted]
 
 permissions:
   id-token: write
   contents: read
   pull-requests: write
+  issues: write
 
 env:
   AWS_REGION: "ap-northeast-1"
@@ -22,7 +21,6 @@ jobs:
       - name: Checkout code (from other review events)
         uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 0
 
       - name: Assume AWS Role using OIDC
