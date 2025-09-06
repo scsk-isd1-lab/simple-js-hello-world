@@ -21,6 +21,7 @@ jobs:
       - name: Checkout code (from other review events)
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.issue.pull_request.head.ref }}
           fetch-depth: 0
 
       - name: Assume AWS Role using OIDC
