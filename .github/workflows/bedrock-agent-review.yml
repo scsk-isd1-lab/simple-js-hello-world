@@ -2,10 +2,8 @@ name: Bedrock Agent Review
 
 on:
   pull_request:
+    branches: [main]
     types: [opened, synchronize, reopened]
-  push:
-    branches:
-      - "**"
 
 permissions:
   id-token: write
