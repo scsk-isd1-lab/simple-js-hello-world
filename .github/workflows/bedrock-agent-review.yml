@@ -1,7 +1,8 @@
 name: Bedrock Agent Review
 
 on:
-  issue_comment:
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   id-token: write
@@ -16,13 +17,12 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: ${{ github.event.issue.pull_request != null }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
-          fetch-depth: 0 # Fetch all history for diff analysis
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          fetch-depth: 0
 
       - name: Assume AWS Role using OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -36,26 +36,34 @@ jobs:
         with:
           agent_id: "HG3FHKX9GY"
           agent_alias_id: "Y7IXOPEHZ2"
-          # memory_id: 'terraform-expert-memory' # Titan Models are not supported.
           action_prompt: |
-            Role: You are a Commander Agent coordinating Frontend Development
+            役割: あなたはフロントエンド開発の司令塔エージェントです。次の2つの専門エージェントを調整してPR差分をレビューしてください。
+            - 設計エージェント: アーキテクチャ/設計、UI/UX、アクセシビリティ、セキュリティ、パフォーマンス（ロード戦略・画像最適化・キャッシュ・バンドルサイズ）、依存関係、テスト観点を担当。
+            - 実装エージェント: コード品質（可読性・命名・重複排除）、潜在バグ、アンチパターン、非同期処理/エラーハンドリング、イベント/DOM操作、モジュール化、型・Lint/Format、パフォーマンス微調整を担当。
 
-            Task: Review the provided JavaScript (.js) and HTML (.html) changes for syntax, security, performance, accessibility, and best practices. Coordinate with Design Agent and Implementation Agent for analysis only. Do not make actual code modifications.
+            対象: このPRで変更された JavaScript(.js) と HTML(.html)。差分に基づき、具体的・実行可能な指摘と改善提案を出すこと。
 
-            Process:
-            1. Analyze the changes and identify areas for improvement.
-            2. Delegate specific tasks to Design Agent for architecture/tactics and Implementation Agent for code execution.
-            3. Compile findings into recommendations.
-            4. Output a Japanese summary of the analysis and proposed modifications.
+            制約:
+            - ここではソースコードの直接修正は行わない（レビューと提案のみ）。
+            - 可能であれば該当ファイルの行番号を示す。
+            - セキュリティ/アクセシビリティ/パフォーマンスは優先度高で確認する。
 
-            Expected Output Format (in Japanese):
-            ### 変更サマリー
-            - **ファイル名: (行番号を含む)**
-              - 改善提案: (詳細な内容)
+            出力要件（日本語）:
+            ### 設計レビュー（Design Agent）
+            - 観点ごとの所見と改善提案（必要なら根拠やリスクも）
+
+            ### 実装レビュー（Implementation Agent）
+            - 観点ごとの所見と改善提案（具体的なコード変更案の概要）
+
+            ### 変更サマリー（ファイル別）
+            - **ファイル名:（必要なら行番号）**
+              - 改善提案:（短く具体的に。理由/効果/注意点）
+
+            ### 優先度と次アクション
+            - 高/中/低の優先度付けと推奨手順
 
             ### 全体サマリー
-            - 司令塔分析結果とエージェント推薦をまとめた日本語サマリー。問題がなければ「問題ありません」とする。
-          # ignore_patterns: "**/*.md,docs/**,.github/**"
+            - 総評（問題がなければ「問題ありません」）。
           debug: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
