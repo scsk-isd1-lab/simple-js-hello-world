@@ -1,0 +1,26 @@
+name: Debug Issue Comment
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Quick context
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "is_pr=${{ github.event.issue.pull_request != null }}"
+          echo "issue_number=${{ github.event.issue.number }}"
+          echo "actor=${{ github.actor }}"
+          echo "repo=${{ github.repository }}"
+          echo "comment_body<<'EOF'"
+          echo "${{ github.event.comment.body }}"
+          echo "EOF"
+
+      - name: Dump raw event JSON
+        run: |
+          echo "GITHUB_EVENT_NAME=$GITHUB_EVENT_NAME"
+          echo "--- event payload ---"
+          cat "$GITHUB_EVENT_PATH"
