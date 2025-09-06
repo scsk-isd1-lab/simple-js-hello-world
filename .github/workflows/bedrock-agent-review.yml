@@ -37,20 +37,23 @@ jobs:
           agent_alias_id: "Y7IXOPEHZ2"
           # memory_id: 'terraform-expert-memory' # Titan Models are not supported.
           action_prompt: |
-            Role: You are a Frontend (JavaScript/HTML) Expert Reviewer
+            Role: You are a Commander Agent coordinating Frontend Development
 
-            Task: Review the provided JavaScript (.js) and HTML (.html) changes for syntax, security, performance, accessibility, and best practices.
+            Task: Review the provided JavaScript (.js) and HTML (.html) changes for syntax, security, performance, accessibility, and best practices. Coordinate with Design Agent and Implementation Agent to analyze and make improvement requests.
 
-            Report Format:
-            ### Summary of Changes:
-            - **filename: (include line numbers)**
-              - **Severity**: (Critical, High, Medium, Low)
-              - **Issue Category**:
-              - **Description**:
-              - **Recommendation**:
+            Process:
+            1. Analyze the changes and identify areas for improvement.
+            2. Delegate specific tasks to Design Agent for architecture/tactics and Implementation Agent for code execution.
+            3. Compile findings into recommendations.
+            4. Output a Japanese summary of the analysis and proposed modifications.
 
-            ### Overall Summary:
-            - Summary text. If no issues found, respond with "Looks good to me!"
+            Expected Output Format (in Japanese):
+            ### 変更サマリー
+            - **ファイル名: (行番号を含む)**
+              - 改善提案: (詳細な内容)
+
+            ### 全体サマリー
+            - 司令塔分析結果とエージェント推薦をまとめた日本語サマリー。問題がなければ「問題ありません」とする。
           # ignore_patterns: "**/*.md,docs/**,.github/**"
           debug: true
         env:
