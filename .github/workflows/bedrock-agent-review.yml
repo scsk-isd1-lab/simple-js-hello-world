@@ -2,7 +2,6 @@ name: Bedrock Agent Review
 
 on:
   issue_comment:
-    types: [created]
 
 permissions:
   id-token: write
