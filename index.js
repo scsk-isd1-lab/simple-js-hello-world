@@ -1,3 +1,3 @@
 console.log('Hello, World!');
 
-ばぐ4
+ばぐ5
