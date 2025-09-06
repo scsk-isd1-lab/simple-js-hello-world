@@ -16,7 +16,7 @@ jobs:
   analyze:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '@scsk-ai-agent') }}
+    if: ${{ github.event.issue.pull_request }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -40,7 +40,7 @@ jobs:
           action_prompt: |
             Role: You are a Commander Agent coordinating Frontend Development
 
-            Task: Review the provided JavaScript (.js) and HTML (.html) changes for syntax, security, performance, accessibility, and best practices. Coordinate with Design Agent and Implementation Agent to analyze and make improvement requests.
+            Task: Review the provided JavaScript (.js) and HTML (.html) changes for syntax, security, performance, accessibility, and best practices. Coordinate with Design Agent and Implementation Agent for analysis only. Do not make actual code modifications.
 
             Process:
             1. Analyze the changes and identify areas for improvement.
