@@ -6,4 +6,4 @@ function displayHelloWorld() {
 // アプリケーションのエントリーポイント
 displayHelloWorld();
 
-ばぐ5
+ばぐ6
