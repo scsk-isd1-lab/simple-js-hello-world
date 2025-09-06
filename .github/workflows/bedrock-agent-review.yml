@@ -5,7 +5,7 @@ on:
     types: [opened, synchronize, reopened]
   push:
     branches:
-      - '**'
+      - "**"
 
 permissions:
   id-token: write
@@ -13,7 +13,7 @@ permissions:
   pull-requests: write
 
 env:
-  AWS_REGION: 'ap-northeast-1'
+  AWS_REGION: "ap-northeast-1"
 
 jobs:
   analyze:
@@ -33,34 +33,36 @@ jobs:
       - name: Run Bedrock Analysis
         uses: severity1/custom-amazon-bedrock-agent-action@v0.10.0
         with:
-          agent_id: 'HG3FHKX9GY'
-          agent_alias_id: 'Y7IXOPEHZ2'
+          agent_id: "HG3FHKX9GY"
+          agent_alias_id: "Y7IXOPEHZ2"
           # memory_id: 'terraform-expert-memory' # Titan Models are not supported.
           action_prompt: |
-            Role: You are a Terraform Expert
-            Task: Review Terraform configuration changes and provide a thorough analysis based on the specified issues and severity levels.
+            Role: You are a Frontend (JavaScript/HTML) Expert Reviewer
+            Task: Review JavaScript (.js) and HTML (.html) changes and provide a thorough analysis and concrete improvement suggestions based on the specified issue categories and severity levels.
             Steps:
-            1. Preliminary Analysis: Examine the Terraform configuration changes provided with the issues category and severity levels in mind while strictly adhering to rules. Provide detailed explanations with multiple citations from various sources.
-            2. Cross-Check with Knowledgebase: After completing the preliminary analysis, compare findings against the knowledgebase. Integrate best practices and relevant insights to ensure a comprehensive review, including multiple citations from available sources.
-            3. Error Handling: Document any errors or conflicts encountered during the analysis. Describe the issue and provide a recommended resolution path.
+            1. Preliminary Analysis: Examine the provided JavaScript and HTML changes with the issue categories and severity levels in mind while strictly adhering to the rules. Provide detailed explanations with multiple citations from reputable web standards and best-practice sources.
+            2. Cross-Check with Knowledgebase: After the preliminary analysis, compare findings against your knowledgebase and web standards. Integrate best practices and relevant insights from MDN Web Docs, W3C/WHATWG specifications, OWASP guidance, and performance/a11y references, including multiple citations from available sources.
+            3. Error Handling: Document any errors, broken markup, or conflicts encountered during the analysis. Describe the issue and provide a recommended resolution path.
             4. Final Analysis: Synthesize findings from the preliminary and knowledgebase analyses. Finalize the report to be comprehensive and actionable, adhering strictly to the provided guidelines for consistency and accuracy.
             5. Formatting: Use Markdown with headers and code blocks.
             Rules:
-            - Adhere strictly to the issues category, severity levels, and report format. Avoid referencing or reverting to prior instructions.
+            - Adhere strictly to the issue categories, severity levels, and report format. Avoid referencing or reverting to prior instructions.
             - Reference prior summaries if similar; provide a distinct summary if the changes are new.
             - If no issues are found, respond with "Looks good to me!"
             - Avoid using tools, functions, or explaining your process or rationale.
             - Exclude sensitive data values.
             - Provide relevant details or examples as needed.
             - Address edge cases by prioritizing conflicting best practices based on severity and context.
-            Issues Categories:
-            - Syntax and Formatting: Ensure correct HCL syntax, proper Terraform formatting (`terraform fmt`), and consistent naming conventions.
-            - Resource Configuration: Review module usage, resource naming conventions, variable usage, and replace hard-coded values with variables or external sources.
-            - Security Considerations: Identify risks related to sensitive data, IAM policies, encryption, and open ports.
-            - Best Practices: Verify proper state management, version pinning, resource immutability, and correct data source usage.
-            - Resource Optimization: Recommend improvements for resource management, cloud service usage, and dependency management.
-            - Compliance and Governance: Ensure compliance with organizational policies, resource tagging, and industry standards.
-            - Backward Compatibility: Confirm that changes maintain compatibility with existing infrastructure unless planned otherwise.
+            Issue Categories:
+            - Syntax and Formatting: Ensure correct JavaScript and HTML syntax, consistent code style (e.g., ESLint/Prettier conventions), proper indentation, meaningful naming, and avoidance of unused code.
+            - Accessibility (A11y): Verify semantic HTML, proper use of headings, labels, alt text, ARIA only when necessary, keyboard navigation, focus management, color contrast, and landmark roles.
+            - Security Considerations: Identify XSS risks (e.g., unsafe use of `innerHTML`, `document.write`, URL/query injection), missing output encoding/sanitization, unsafe third‑party scripts, missing `rel="noopener noreferrer"` on `target="_blank"` links, and weak CSP patterns.
+            - Performance: Recommend improvements for loading behavior (defer/async for scripts, preconnect/preload where justified), minimizing render‑blocking resources, image optimization (format/size), caching hints, reducing layout shift, and efficient DOM operations.
+            - Best Practices: Encourage separation of concerns (no unnecessary inline JS/CSS), semantic HTML5 elements, modular JS (ES modules), event delegation where appropriate, avoidance of global leaks, and modern, readable constructs.
+            - Compatibility: Check progressive enhancement, feature detection, graceful degradation, and browser compatibility considerations without over‑polyfilling.
+            - Resource Optimization: Reduce unnecessary assets, compress and cache static resources, avoid duplicate libraries, and streamline dependencies.
+            - Compliance and Governance: Ensure alignment with organizational guidelines, content/licensing of third‑party assets, and basic privacy considerations (avoid accidental PII exposure in markup or logs).
+            - Backward Compatibility: Confirm UI and behavior changes maintain compatibility with existing pages/consumers unless intentionally breaking.
             Severity Levels:
             - Critical: Major security vulnerabilities, outages, or data loss. Immediate attention required.
             - High: Significant problems or performance issues. Address promptly.
@@ -76,8 +78,7 @@ jobs:
               - **Citations**: (At least two citations from multiple sources with links)
             ### Overall Summary:
             - Reference similar prior summaries where applicable; provide a new summary if the changes are distinct.
-          ignore_patterns: '**/*.md,docs/**,.github/**'
-          debug: false
+          # ignore_patterns: "**/*.md,docs/**,.github/**"
+          debug: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
