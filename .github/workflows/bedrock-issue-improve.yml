@@ -66,7 +66,15 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('bedrock_agent_text.txt', 'utf8');
+            let body = '';
+            try { body = fs.readFileSync('bedrock_agent_text.txt', 'utf8').trim(); } catch (e) {}
+            if (!body) {
+              let raw = '';
+              try { raw = fs.readFileSync('bedrock_agent_output.json', 'utf8'); } catch (e) { raw = '(no output)'; }
+              // truncate to avoid oversized comments
+              const snippet = raw.length > 60000 ? raw.slice(0, 60000) + '\n...[truncated]...' : raw;
+              body = 'Bedrockの出力が空でした。参考ログ:\n\n```\n' + snippet + '\n```';
+            }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,

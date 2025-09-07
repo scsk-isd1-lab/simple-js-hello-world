@@ -179,6 +179,8 @@ def main():
         sys.stderr.write(f"Failed to write JSON output: {e}\n")
 
     try:
+        if not text or not str(text).strip():
+            text = "Bedrockの出力が空でした。詳細は Actions のログおよび bedrock_agent_output.json を確認してください。"
         with open(out_text_path, "w", encoding="utf-8") as f:
             f.write(text or "")
     except Exception as e:
