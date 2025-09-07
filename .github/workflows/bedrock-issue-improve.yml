@@ -33,6 +33,7 @@ jobs:
       - name: Invoke Bedrock Agent via Python SDK
         id: bedrock
         env:
+          DEBUG_BEDROCK: "1"
           AGENT_ID: "HG3FHKX9GY"
           AGENT_ALIAS_ID: "Y7IXOPEHZ2"
           PROMPT: |
