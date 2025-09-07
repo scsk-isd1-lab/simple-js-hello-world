@@ -14,9 +14,9 @@ env:
 
 jobs:
   apply:
+    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/apply') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/apply') }}
     steps:
       - name: Resolve PR context + command options
         id: ctx

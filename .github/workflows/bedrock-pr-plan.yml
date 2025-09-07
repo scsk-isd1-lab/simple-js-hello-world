@@ -16,10 +16,10 @@ env:
 
 jobs:
   plan:
+    if: >
+      ${{ github.event_name == 'pull_request_review' || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/plan') ) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: >
-      ${{ github.event_name == 'pull_request_review' || (github.event_name == 'issue_comment' && github.event.issue.pull_request) }}
     steps:
       - name: Debug incoming event (issue_comment only)
         if: ${{ github.event_name == 'issue_comment' }}
