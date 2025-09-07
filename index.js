@@ -1,3 +1,1 @@
-console.log('Hello, World!');
-
-ばぐ6
+console.log('Hello
