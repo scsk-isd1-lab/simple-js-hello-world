@@ -185,6 +185,17 @@ jobs:
           # 3) 正規化: CRLF 除去 + "\\ No newline at end of file" 行削除 + 末尾に改行
           sed -e 's/\r$//' -e '/^\\ No newline at end of file$/d' patch.diff > patch.norm.diff || cp patch.diff patch.norm.diff
           printf '\n' >> patch.norm.diff
+          # 4) サニタイズ: パッチ以外の行を削除（説明文などを除去）
+          awk '/^(diff --git |index |--- |\+\+\+ |@@ |[+\- ]|\\ No newline at end of file$)/ || /^\s*$/{print}' patch.norm.diff > patch.sanitized.diff || true
+          if [ -s patch.sanitized.diff ]; then
+            # 見出し行（--- と +++）が少なくとも1組あることを要求
+            if grep -qE '^--- ' patch.sanitized.diff && grep -qE '^\+\+\+ ' patch.sanitized.diff; then
+              mv patch.sanitized.diff patch.norm.diff
+            else
+              # 見出しが無い断片は適用不能として扱う
+              : > patch.norm.diff
+            fi
+          fi
           bytes=$(wc -c < patch.norm.diff | tr -d ' ')
           echo "size=$bytes" >> $GITHUB_OUTPUT
           echo "has_patch=$([ "$bytes" -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
