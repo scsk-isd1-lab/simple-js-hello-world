@@ -1,13 +1,13 @@
-name: Bedrock Issue Improve
+name: Bedrock PR Improve
 
 on:
-  issues:
-    types: [opened]
+  pull_request_review:
+    types: [submitted]
 
 permissions:
   id-token: write
   contents: write
-  issues: write
+  pull-requests: write
 
 env:
   AWS_REGION: "ap-northeast-1"
@@ -17,149 +17,59 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Extract PR context from issue body
-        id: prctx
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const body = (context.payload.issue.body || '').toString();
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-
-            let prNumber = null;
-            // Try explicit PR URL first
-            let m = body.match(/https?:\/\/github\.com\/[\w-]+\/[\w.-]+\/pull\/(\d+)/i);
-            if (m) {
-              prNumber = parseInt(m[1], 10);
-            }
-            // Try "PR #123" pattern
-            if (!prNumber) {
-              m = body.match(/\bPR\s*#(\d+)\b/i);
-              if (m) prNumber = parseInt(m[1], 10);
-            }
-            // Fallback: first #123 that is a valid PR
-            if (!prNumber) {
-              m = body.match(/#(\d+)/);
-              if (m) {
-                const candidate = parseInt(m[1], 10);
-                try {
-                  await github.rest.pulls.get({ owner, repo, pull_number: candidate });
-                  prNumber = candidate;
-                } catch (e) {
-                  // not a PR; ignore
-                }
-              }
-            }
-
-            if (prNumber) {
-              const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
-              const headRef = pr.head.ref;
-              const headRepo = pr.head.repo.full_name;
-              const baseRef = pr.base.ref;
-              const sameRepo = headRepo.toLowerCase() === `${owner}/${repo}`.toLowerCase();
-              core.setOutput('pr_number', String(prNumber));
-              core.setOutput('pr_head_ref', headRef);
-              core.setOutput('pr_head_repo', headRepo);
-              core.setOutput('pr_base_ref', baseRef);
-              core.setOutput('is_same_repo', String(sameRepo));
-              core.info(`Detected PR #${prNumber} head ${headRepo}:${headRef} (base: ${baseRef}, sameRepo=${sameRepo}).`);
-            } else {
-              core.setOutput('pr_number', '');
-              core.setOutput('pr_head_ref', '');
-              core.setOutput('pr_head_repo', '');
-              core.setOutput('pr_base_ref', '');
-              core.setOutput('is_same_repo', 'false');
-              core.info('No PR detected in issue body; will use default branch.');
-            }
-
-      - name: Checkout default branch
-        if: ${{ steps.prctx.outputs.pr_head_ref == '' }}
+      - name: Checkout PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 0
-
-      - name: Checkout PR head (same repo only)
-        if: ${{ steps.prctx.outputs.pr_head_ref != '' && steps.prctx.outputs.is_same_repo == 'true' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.prctx.outputs.pr_head_ref }}
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 0
 
       - name: Assume AWS Role using OIDC
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v5.0.0
         with:
           role-to-assume: arn:aws:iam::649844050696:role/isd1-lab-iamrole-github-actions-deploy
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Run Bedrock Improve Plan
+      - name: Invoke Bedrock Agent via Python SDK
         id: bedrock
-        uses: severity1/custom-amazon-bedrock-agent-action@v0.10.0
-        with:
-          agent_id: "HG3FHKX9GY"
-          agent_alias_id: "Y7IXOPEHZ2"
-          action_prompt: |
-            役割: あなたは司令塔（Coordinator）です。以下の2エージェントに改修依頼を出し、必要な変更をこのリポジトリに直接反映させてください。
-            - 設計エージェント: アーキテクチャ/UX/アクセシビリティ/セキュリティ/パフォーマンス/依存/テスト観点から改善すべき点を洗い出し、改修方針を提示。
-            - 実装エージェント: 具体的なコード変更（.js/.html）の実装、不要コード整理、バグ修正、パフォーマンス微調整、Lint/Format適用を実施。
+        env:
+          AGENT_ID: "HG3FHKX9GY"
+          AGENT_ALIAS_ID: "Y7IXOPEHZ2"
+          PROMPT: |
+            役割: あなたは司令塔（Coordinator）です。以下の2エージェントに改修依頼を出し、必要な変更をこのリポジトリの当該PRブランチに直接反映させてください。
+            - 設計エージェント: アーキテクチャ/UX/アクセシビリティ/セキュリティ/パフォーマンス/依存/テスト観点から改善点を抽出し、改修方針と根拠を提示。
+            - 実装エージェント: 具体的なコード変更（.js/.html）の実装、不要コード整理、バグ修正、パフォーマンス微調整、Lint/Format適用を担当。
 
-            対象: リポジトリの現状、または（検出できた場合）該当PRのヘッドブランチ上の内容。
+            対象: このPRの差分およびブランチ全体。小さく安全な変更から適用すること。
 
-            要件:
-            - 可能な変更はこの実行内でファイルに直接反映する（この後のCIがコミット・プッシュする）。
-            - 変更は小さな論理単位にまとめ、コミットメッセージに目的を簡潔に記すこと。
-            - 互換性に影響する変更には注意喚起を記す。
+            実施要件:
+            - 変更はこのジョブ内でファイルへ直接反映する（後続ステップでコミット・プッシュ）。
+            - 変更は論理単位でまとめ、コミットメッセージに目的を簡潔に記す。
+            - セキュリティ/アクセシビリティ/パフォーマンスの退行がないことを重視。
 
             出力（日本語）:
             ### 設計エージェント: 改修方針
             - 目的/影響/根拠
 
             ### 実装エージェント: 変更点
-            - ファイル別の具体的変更点（必要なら行番号）
+            - ファイル別の具体的変更（必要なら行番号）
 
             ### 完了チェックリスト
-            - Lint/ビルド/表示確認観点
-          debug: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # イベント偽装（当該アクションが issues を未対応のため）
-          # PRが検出できた場合のみ、pull_request 相当の環境を提供
-          GITHUB_EVENT_NAME: ${{ steps.prctx.outputs.pr_head_ref != '' && 'pull_request' || env.GITHUB_EVENT_NAME }}
-          GITHUB_REF: ${{ steps.prctx.outputs.pr_number != '' && format('refs/pull/{0}/head', steps.prctx.outputs.pr_number) || env.GITHUB_REF }}
-          GITHUB_HEAD_REF: ${{ steps.prctx.outputs.pr_head_ref }}
-          GITHUB_BASE_REF: ${{ steps.prctx.outputs.pr_base_ref }}
-
-      - name: Commit and push changes (same repo PR)
-        if: ${{ steps.prctx.outputs.pr_head_ref != '' && steps.prctx.outputs.is_same_repo == 'true' }}
-        env:
-          BRANCH: ${{ steps.prctx.outputs.pr_head_ref }}
+            - Lint/ビルド/表示確認
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if ! git diff --quiet; then
-            git add -A
-            git commit -m "chore: apply improvements suggested by Bedrock"
-            git push origin "HEAD:${BRANCH}"
-          else
-            echo "No changes to commit."
+          set -euo pipefail
+          python scripts/bedrock_invoke_agent.py
 
-      - name: Comment completion to issue
+      - name: Post improve summary as PR comment
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const issue_number = context.payload.issue.number;
-            const sameRepo = '${{ steps.prctx.outputs.is_same_repo }}' === 'true';
-            const prNum = '${{ steps.prctx.outputs.pr_number }}';
-            let body = '改善実施が完了しました。詳細は Actions のログをご確認ください。';
-            if (!sameRepo && prNum) {
-              body += `\n注意: PR #${prNum} はフォークリポジトリ由来のため、このWorkflowから同一ブランチへ直接PUSHできません。手動反映、またはベースリポジトリ側で別ブランチPRを作成してください。`;
-            }
+            const fs = require('fs');
+            const body = fs.readFileSync('bedrock_agent_text.txt', 'utf8');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number,
+              issue_number: context.payload.pull_request.number,
               body
             });
