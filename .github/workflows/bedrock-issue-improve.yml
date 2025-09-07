@@ -30,27 +30,11 @@ jobs:
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Ensure AWS CLI v2 and jq
+      - name: Check AWS CLI and jq
         run: |
           set -euo pipefail
-          if command -v aws >/dev/null 2>&1; then
-            echo "AWS CLI found: $(aws --version)"
-          else
-            echo "Installing AWS CLI v2..."
-            sudo apt-get update
-            sudo apt-get install -y unzip curl
-            curl -sSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-            unzip -q awscliv2.zip
-            sudo ./aws/install --update
-            aws --version
-          fi
-          if command -v jq >/dev/null 2>&1; then
-            echo "jq found: $(jq --version)"
-          else
-            echo "Installing jq..."
-            sudo apt-get update
-            sudo apt-get install -y jq
-          fi
+          aws --version
+          jq --version
 
       - name: Invoke Bedrock Agent via AWS CLI
         id: bedrock
@@ -79,6 +63,7 @@ jobs:
             ### 完了チェックリスト
             - Lint/ビルド/表示確認
         run: |
+          set -euo pipefail
           chmod +x scripts/bedrock_invoke_agent.sh
           scripts/bedrock_invoke_agent.sh
 
