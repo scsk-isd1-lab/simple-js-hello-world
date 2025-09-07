@@ -1,8 +1,10 @@
-name: Bedrock PR Improve
+name: Bedrock PR Plan
 
 on:
   pull_request_review:
     types: [submitted]
+  issue_comment:
+    types: [created]
 
 permissions:
   id-token: write
@@ -13,14 +15,35 @@ env:
   AWS_REGION: "ap-northeast-1"
 
 jobs:
-  improve:
+  plan:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: >
+      ${{ github.event_name == 'pull_request_review' || (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '/plan')) }}
     steps:
+      - name: Resolve PR context
+        id: prctx
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            let pr = context.payload.pull_request;
+            if (!pr && context.payload.issue && context.payload.issue.number) {
+              const num = context.payload.issue.number;
+              const { data } = await github.rest.pulls.get({ owner, repo, pull_number: num });
+              pr = data;
+            }
+            core.setOutput('number', pr.number.toString());
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_ref', pr.base.ref);
+            core.setOutput('url', pr.html_url);
       - name: Checkout PR head
         uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/head
+          ref: refs/pull/${{ steps.prctx.outputs.number }}/head
           fetch-depth: 0
 
       - name: Assume AWS Role using OIDC
@@ -30,18 +53,11 @@ jobs:
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Check Python and Boto3 versions
-        run: |
-          python3 --version
-          pip3 list | grep boto
-          python3 -c "import boto3; print(f'Boto3 version: {boto3.__version__}')"
-          python3 -c "import botocore; print(f'Botocore version: {botocore.__version__}')"
-
       - name: Build prompt file with PR context
         run: |
           set -euo pipefail
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          BASE_SHA="${{ steps.prctx.outputs.base_ref }}"
+          HEAD_SHA="${{ steps.prctx.outputs.head_sha }}"
           OUT="scripts/prompts/_runtime_pr_context.md"
           mkdir -p scripts/prompts
 
@@ -58,9 +74,9 @@ jobs:
           {
             echo "### 対象リポジトリ情報"
             echo "- 組織/リポジトリ: ${{ github.repository }}"
-            echo "- PR番号: ${{ github.event.pull_request.number }}"
-            echo "- PR URL: ${{ github.event.pull_request.html_url }}"
-            echo "- ブランチ: ${{ github.event.pull_request.head.ref }} → ${{ github.event.pull_request.base.ref }}"
+            echo "- PR番号: ${{ steps.prctx.outputs.number }}"
+            echo "- PR URL: ${{ steps.prctx.outputs.url }}"
+            echo "- ブランチ: ${{ steps.prctx.outputs.head_ref }} → ${{ steps.prctx.outputs.base_ref }}"
             echo "- HEAD SHA: ${HEAD_SHA}"
             echo
             echo "### 変更ファイル一覧 (js/html)"
@@ -95,8 +111,9 @@ jobs:
             const path = 'scripts/prompts/_runtime_pr_context.md';
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const prNumber = context.payload.pull_request.number;
-            const pr = context.payload.pull_request;
+            let prNumber = '${{ steps.prctx.outputs.number }}';
+            prNumber = parseInt(prNumber, 10);
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
 
             const prTitle = pr.title || '';
             const prBody = pr.body || '';
@@ -153,10 +170,11 @@ jobs:
 
             fs.appendFileSync(path, '\n' + md, { encoding: 'utf8' });
 
-      - name: Invoke Bedrock Agent via Python SDK
+      - name: Invoke Bedrock Agent via Python SDK (Plan)
         id: bedrock
         env:
           DEBUG_BEDROCK: "1"
+          SESSION_ID: pr-${{ steps.prctx.outputs.number }}
           # 長時間ストリーミングに備えたタイムアウト調整（既定: 読み取り30分）
           BEDROCK_CONNECT_TIMEOUT: "10"
           BEDROCK_READ_TIMEOUT: "1800"
@@ -168,16 +186,16 @@ jobs:
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
           REPO_FULL: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ steps.prctx.outputs.number }}
+          PR_URL: ${{ steps.prctx.outputs.url }}
+          HEAD_REF: ${{ steps.prctx.outputs.head_ref }}
+          BASE_REF: ${{ steps.prctx.outputs.base_ref }}
+          HEAD_SHA: ${{ steps.prctx.outputs.head_sha }}
         run: |
           set -euo pipefail
           python3 scripts/bedrock_invoke_agent.py
 
-      - name: Post improve summary as PR comment
+      - name: Post plan as PR comment (with meta)
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -192,9 +210,18 @@ jobs:
               const snippet = raw.length > 60000 ? raw.slice(0, 60000) + '\n...[truncated]...' : raw;
               body = 'Bedrockの出力が空でした。参考ログ:\n\n```\n' + snippet + '\n```';
             }
+            const meta = [
+              '```plan-meta',
+              `session_id: pr-${{ steps.prctx.outputs.number }}`,
+              `pr_number: ${{ steps.prctx.outputs.number }}`,
+              `head_ref: ${{ steps.prctx.outputs.head_ref }}`,
+              `base_ref: ${{ steps.prctx.outputs.base_ref }}`,
+              '```'
+            ].join('\n');
+            body += '\n\n' + meta;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
+              issue_number: Number('${{ steps.prctx.outputs.number }}'),
               body
             });

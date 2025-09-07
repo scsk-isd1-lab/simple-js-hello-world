@@ -142,7 +142,8 @@ def make_client(session: boto3.Session, service_name: str):
 def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
     session = make_session(region)
     client = make_client(session, "bedrock-agent-runtime")
-    session_id = f"{os.getenv('GITHUB_RUN_ID', 'manual')}-{int(time.time())}"
+    # セッションIDは環境変数 SESSION_ID を優先、なければ実行ID+時刻
+    session_id = os.getenv('SESSION_ID') or f"{os.getenv('GITHUB_RUN_ID', 'manual')}-{int(time.time())}"
     if DEBUG:
         log(f"invoke_agent: region={region} agent_id={agent_id} alias={agent_alias_id} session_id={session_id}")
     resp = client.invoke_agent(

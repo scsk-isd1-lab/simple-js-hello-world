@@ -1,0 +1,226 @@
+name: Bedrock PR Apply
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
+env:
+  AWS_REGION: "ap-northeast-1"
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/apply') }}
+    steps:
+      - name: Resolve PR context + command options
+        id: ctx
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const num = context.payload.issue.number;
+            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: num });
+            const cmd = (context.payload.comment.body || '').toString();
+            const dry = /\b(dry-run)\b/i.test(cmd);
+            const steps = (cmd.match(/step\s*:\s*([\d,\s]+)/i)?.[1] || '').split(/\s*,\s*/).filter(Boolean);
+            core.setOutput('number', pr.number.toString());
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_ref', pr.base.ref);
+            core.setOutput('url', pr.html_url);
+            core.setOutput('dry', String(dry));
+            core.setOutput('steps', steps.join(','));
+
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ steps.ctx.outputs.number }}/head
+          fetch-depth: 0
+
+      - name: Assume AWS Role using OIDC
+        uses: aws-actions/configure-aws-credentials@v5.0.0
+        with:
+          role-to-assume: arn:aws:iam::649844050696:role/isd1-lab-iamrole-github-actions-deploy
+          role-session-name: GitHub_to_AWS_via_FederatedOIDC
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build prompt file with PR context (Apply)
+        run: |
+          set -euo pipefail
+          BASE_REF="${{ steps.ctx.outputs.base_ref }}"
+          HEAD_SHA="${{ steps.ctx.outputs.head_sha }}"
+          if git rev-parse --verify -q "origin/${BASE_REF}" >/dev/null 2>&1; then
+            BASE_SHA=$(git rev-parse "origin/${BASE_REF}")
+          else
+            BASE_SHA=$(git merge-base "origin/${BASE_REF}" "${HEAD_SHA}" || echo "${HEAD_SHA}")
+          fi
+          OUT="scripts/prompts/_runtime_pr_apply.md"
+          mkdir -p scripts/prompts
+
+          # 1) Instruction preface (APPLY prompt)
+          if [ -f scripts/prompts/pr_apply_agent_ja.md ]; then
+            cat scripts/prompts/pr_apply_agent_ja.md > "$OUT"
+            echo >> "$OUT"
+          elif [ -f scripts/prompts/pr_improve_agent_ja.md ]; then
+            # 旧版プロンプトを暫定利用
+            cat scripts/prompts/pr_improve_agent_ja.md > "$OUT"
+            echo >> "$OUT"
+          fi
+
+          {
+            echo "### 対象リポジトリ情報"
+            echo "- 組織/リポジトリ: ${{ github.repository }}"
+            echo "- PR番号: ${{ steps.ctx.outputs.number }}"
+            echo "- PR URL: ${{ steps.ctx.outputs.url }}"
+            echo "- ブランチ: ${{ steps.ctx.outputs.head_ref }} → ${{ steps.ctx.outputs.base_ref }}"
+            echo "- HEAD SHA: ${HEAD_SHA}"
+            echo
+            echo "### 変更ファイル一覧 (js/html)"
+            git diff --name-status "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html' || true
+            echo
+            echo "### 差分 (unified=0, 上限あり)"
+            echo '```diff'
+            git diff --unified=0 --no-color "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html' | head -c 200000
+            echo
+            echo '```'
+            echo
+            echo "### 変更ファイル本文抜粋 (各 800 行まで, 最大 20 ファイル)"
+            i=0
+            for f in $(git diff --name-only --diff-filter=AM "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html'); do
+              i=$((i+1)); [ $i -gt 20 ] && break
+              echo
+              echo "#### ${f}"
+              echo '```'
+              git show "${HEAD_SHA}:${f}" | head -n 800 || true
+              echo '```'
+            done
+            echo
+            echo "### 実装指示"
+            echo "- 以下のレビュー計画（plan-meta）に基づき、指定されたステップのみを実装してください（未指定なら全ステップ）。"
+            echo "- 変更は統一diff（unified diff）として出力し、```diff で囲むこと。"
+            echo "- 可能なら小さな論理単位で分割し、各パッチに簡潔なコミットメッセージ案を付すこと。"
+            echo
+            echo "適用モード:"
+            echo "- dry-run: ${{ steps.ctx.outputs.dry }}"
+            echo "- steps: ${{ steps.ctx.outputs.steps }}"
+          } > "$OUT"
+
+          echo "PROMPT_FILE=$OUT" >> "$GITHUB_ENV"
+
+      - name: Locate latest plan-meta
+        id: plan
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const num = parseInt('${{ steps.ctx.outputs.number }}', 10);
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: num, per_page: 100 });
+            const botNames = new Set(['github-actions[bot]', 'github-actions']);
+            for (let i = comments.length - 1; i >= 0; i--) {
+              const c = comments[i];
+              const body = (c.body || '').toString();
+              if (botNames.has(c.user?.login) && body.includes('```plan-meta')) {
+                const m = body.match(/```plan-meta[\s\S]*?```/);
+                if (m) {
+                  const block = m[0];
+                  // very simple parse
+                  const sid = block.match(/session_id\s*:\s*(.+)/)?.[1]?.trim() || '';
+                  core.setOutput('session_id', sid || `pr-${num}`);
+                  return;
+                }
+              }
+            }
+            core.setOutput('session_id', `pr-${num}`);
+
+      - name: Invoke Bedrock Agent via Python SDK (Apply)
+        id: bedrock
+        env:
+          DEBUG_BEDROCK: "1"
+          SESSION_ID: ${{ steps.plan.outputs.session_id }}
+          BEDROCK_CONNECT_TIMEOUT: "10"
+          BEDROCK_READ_TIMEOUT: "1800"
+          BEDROCK_MAX_ATTEMPTS: "3"
+          AGENT_ID: "HG3FHKX9GY"
+          AGENT_ALIAS_ID: "Y7IXOPEHZ2"
+          PROMPT_FILE: ${{ env.PROMPT_FILE }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          REPO_FULL: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.ctx.outputs.number }}
+          PR_URL: ${{ steps.ctx.outputs.url }}
+          HEAD_REF: ${{ steps.ctx.outputs.head_ref }}
+          BASE_REF: ${{ steps.ctx.outputs.base_ref }}
+          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/bedrock_invoke_agent.py
+
+      - name: Extract patch from response
+        id: patch
+        run: |
+          set -euo pipefail
+          # 抽出: ```diff ... ``` 最初のブロックを取り出す
+          awk 'BEGIN{flag=0} /^```diff/{flag=1; next} /^```/{if(flag){exit} } {if(flag)print}' bedrock_agent_text.txt > patch.diff || true
+          bytes=$(wc -c < patch.diff | tr -d ' ')
+          echo "size=$bytes" >> $GITHUB_OUTPUT
+          if [ "$bytes" -gt 0 ]; then
+            echo "has_patch=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_patch=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Apply patch (dry-run or real)
+        if: ${{ steps.patch.outputs.has_patch == 'true' }}
+        id: apply
+        run: |
+          set -euo pipefail
+          echo "--- Patch preview (first 400 lines) ---"
+          head -n 400 patch.diff || true
+          if [ "${{ steps.ctx.outputs.dry }}" = "true" ]; then
+            echo "dry_run=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # 適用（失敗時は終了）
+          git apply --index --whitespace=fix patch.diff
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: apply Bedrock patch from /apply"
+          git push origin HEAD:${{ steps.ctx.outputs.head_ref }}
+          echo "dry_run=false" >> $GITHUB_OUTPUT
+
+      - name: Comment result to PR
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const hasPatch = '${{ steps.patch.outputs.has_patch }}' === 'true';
+            const dry = '${{ steps.apply.outputs.dry_run }}' === 'true';
+            let body = '';
+            if (!hasPatch) {
+              let raw = '';
+              try { raw = fs.readFileSync('bedrock_agent_text.txt', 'utf8'); } catch (e) {}
+              body = 'パッチが抽出できませんでした。参考出力:\n\n```\n' + (raw.slice(0,60000)) + '\n```';
+            } else if (dry) {
+              const snippet = fs.readFileSync('patch.diff', 'utf8').slice(0,60000);
+              body = 'dry-run のため適用せず、パッチを提示します:\n\n```diff\n' + snippet + '\n```';
+            } else {
+              body = 'パッチを適用し、PRブランチへ push しました。';
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ steps.ctx.outputs.number }}'),
+              body
+            });
