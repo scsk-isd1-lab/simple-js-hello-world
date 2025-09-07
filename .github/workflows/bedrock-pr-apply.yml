@@ -105,7 +105,6 @@ jobs:
             echo
             echo "### 実装指示"
             echo "- 以下のレビュー計画（plan-meta）に基づき、指定されたステップのみを実装してください（未指定なら全ステップ）。"
-            echo '- 変更は統一diff（unified diff）として出力し、```diff で囲むこと。'
             echo "- 可能なら小さな論理単位で分割し、各パッチに簡潔なコミットメッセージ案を付すこと。"
             echo
             echo "適用モード:"
@@ -183,8 +182,8 @@ jobs:
           if [ ! -s patch.diff ]; then
             awk 'BEGIN{flag=0} /^```[a-zA-Z]*$/{flag=1; next} /^```[[:space:]]*$/{if(flag){exit} } {if(flag)print}' bedrock_agent_text.txt > patch.diff || true
           fi
-          # 3) 正規化: CRLF を除去し、末尾に改行を付与
-          sed -e 's/\r$//' patch.diff > patch.norm.diff || cp patch.diff patch.norm.diff
+          # 3) 正規化: CRLF 除去 + "\\ No newline at end of file" 行削除 + 末尾に改行
+          sed -e 's/\r$//' -e '/^\\ No newline at end of file$/d' patch.diff > patch.norm.diff || cp patch.diff patch.norm.diff
           printf '\n' >> patch.norm.diff
           bytes=$(wc -c < patch.norm.diff | tr -d ' ')
           echo "size=$bytes" >> $GITHUB_OUTPUT
@@ -201,15 +200,27 @@ jobs:
             echo "dry_run=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          # 適用トライ: unidiff-zero → 3way → 失敗
+          # 適用トライ: unidiff-zero → 3-way → GNU patch（dry-run → 本適用）
           if git apply --check --unidiff-zero patch.norm.diff; then
             git apply --index --unidiff-zero --whitespace=fix patch.norm.diff
           else
             echo "primary apply failed -- trying 3-way merge" >&2
-            git apply --index --3way --whitespace=fix patch.norm.diff || {
-              echo 'patch apply failed. See preview above.' >&2
-              exit 128
-            }
+            if git apply --check --3way patch.norm.diff; then
+              git apply --index --3way --whitespace=fix patch.norm.diff
+            else
+              echo "3-way merge failed -- trying GNU patch (dry run)" >&2
+              if command -v patch >/dev/null 2>&1; then
+                if patch --dry-run -p1 < patch.norm.diff; then
+                  patch -p1 < patch.norm.diff
+                else
+                  echo 'patch apply failed at all strategies.' >&2
+                  exit 128
+                fi
+              else
+                echo 'patch command not available and git apply strategies failed.' >&2
+                exit 128
+              fi
+            fi
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -232,7 +243,7 @@ jobs:
               try { raw = fs.readFileSync('bedrock_agent_text.txt', 'utf8'); } catch (e) {}
               body = 'パッチが抽出できませんでした。参考出力:\n\n```\n' + (raw.slice(0,60000)) + '\n```';
             } else if (dry) {
-              const snippet = fs.readFileSync('patch.diff', 'utf8').slice(0,60000);
+              const snippet = fs.readFileSync('patch.norm.diff', 'utf8').slice(0,60000);
               body = 'dry-run のため適用せず、パッチを提示します:\n\n```diff\n' + snippet + '\n```';
             } else {
               body = 'パッチを適用し、PRブランチへ push しました。';
@@ -243,3 +254,14 @@ jobs:
               issue_number: Number('${{ steps.ctx.outputs.number }}'),
               body
             });
+
+      - name: Upload patch artifact (for debugging)
+        if: ${{ steps.patch.outputs.has_patch == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-apply-patch-${{ steps.ctx.outputs.number }}
+          path: |
+            patch.diff
+            patch.norm.diff
+          if-no-files-found: warn
+          retention-days: 7
