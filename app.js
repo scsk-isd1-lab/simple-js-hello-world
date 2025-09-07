@@ -1,7 +1,9 @@
 /**
- * Hello World メッセージをコンソールに出力し、APIリクエストを開始する
- * @public
+ * Hello World メッセージをコンソールに出力し、ユーザーデータ取得を開始する関数
+ * アプリケーションの主要なエントリーポイント関数として機能する
+ * 
  * @returns {void}
+ * @example displayHelloWorld();
  */
 function displayHelloWorld() {
   console.log('Hello, World!');
@@ -9,60 +11,71 @@ function displayHelloWorld() {
 }
 
 /**
- * APIからユーザーデータを取得する
- * @public
- * @param {number} userId - 取得するユーザーのID（デフォルト: 1）
- * @returns {Promise<Object|null>} ユーザーデータまたはnull
- * @throws {Error} APIリクエスト失敗時にエラーをスロー（内部でキャッチされる）
+ * 外部APIからユーザーデータを取得する関数
+ * @async
+ * @param {number} [userId=1] - 取得するユーザーのID
+ * @returns {Promise<Object|null>} 成功時はユーザーデータ、失敗時はnull
  */
 async function fetchUserData(userId = 1) {
   const apiUrl = `https://jsonplaceholder.typicode.com/users/${userId}`;
   
   try {
+    // APIリクエストの開始をログ
+    console.log(`Fetching user data from: ${apiUrl}`);
+    
     const response = await fetch(apiUrl);
     
-    // HTTP エラーハンドリング
+    // レスポンスステータスコードの確認
     if (!response.ok) {
-      throw new Error(`APIエラー: ${response.status} ${response.statusText}`);
+      throw new Error(`API request failed with status: ${response.status}`);
     }
     
     const userData = await response.json();
-    displayUserInfo(userData);
+    console.log('User data retrieved successfully:', userData);
+    
+    // 取得したデータを表示（実際のアプリでは適切なDOM操作などで表示）
+    displayUserData(userData);
+    
     return userData;
   } catch (error) {
-    handleApiError(error);
+    // エラーハンドリング
+    console.error('Error fetching user data:', error.message);
+    displayErrorMessage(`ユーザーデータの取得に失敗しました: ${error.message}`);
     return null;
   }
 }
 
 /**
- * APIエラーを処理し、ユーザーに通知する
- * @param {Error} error - 発生したエラー
- * @private
+ * ユーザーデータをコンソールに表示する関数
+ * 実際のアプリケーションではDOM要素に表示するように拡張可能
+ * 
+ * @param {Object} user - 表示するユーザー情報
+ * @param {string} user.name - ユーザーの名前
+ * @param {string} user.email - ユーザーのメールアドレス
  * @returns {void}
  */
-function handleApiError(error) {
-  console.error('データ取得中にエラーが発生しました:', error.message);
-  // DOMがある環境では、ユーザーに表示するエラーメッセージを追加
-  if (typeof document !== 'undefined') {
-    const errorElement = document.createElement('div');
-    errorElement.className = 'error-message';
-    errorElement.textContent = `データ取得に失敗しました: ${error.message}`;
-    document.body.appendChild(errorElement);
-  }
+function displayUserData(user) {
+  console.log(`Name: ${user.name}, Email: ${user.email}`);
 }
 
 /**
- * ユーザー情報を表示する
- * @param {Object} user - ユーザーデータ
- * @param {string} user.name - ユーザーの名前
- * @param {string} user.email - ユーザーのメールアドレス
- * @private
+ * エラーメッセージをコンソールに表示する関数
+ * 実際のアプリケーションではUI上に適切に表示するように拡張可能
+ * 
+ * @param {string} message - 表示するエラーメッセージ
  * @returns {void}
  */
-function displayUserInfo(user) {
-  console.log(`ユーザー情報: ${user.name} (${user.email})`);
+function displayErrorMessage(message) {
+  console.error(`エラー: ${message}`);
 }
 
-// アプリケーションのエントリーポイント
+/**
+ * アプリケーションの起動
+ * ページロード時にアプリケーションを初期化する
+ * 
+ * 将来的にはより複雑な初期化ロジックに拡張可能
+ */
 displayHelloWorld();
+
+// Node.jsでモジュールとしてエクスポート（必要に応じて）
+// module.exports = { displayHelloWorld, fetchUserData, displayUserData, displayErrorMessage };
