@@ -169,15 +169,18 @@ jobs:
         id: patch
         run: |
           set -euo pipefail
-          # 抽出: ```diff ... ``` 最初のブロックを取り出す
+          # 1) 抽出: ```diff … ``` の最初のブロック
           awk 'BEGIN{flag=0} /^```diff/{flag=1; next} /^```/{if(flag){exit} } {if(flag)print}' bedrock_agent_text.txt > patch.diff || true
-          bytes=$(wc -c < patch.diff | tr -d ' ')
-          echo "size=$bytes" >> $GITHUB_OUTPUT
-          if [ "$bytes" -gt 0 ]; then
-            echo "has_patch=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_patch=false" >> $GITHUB_OUTPUT
+          # 2) 代替: 言語指定がない ``` … ``` の最初のブロック
+          if [ ! -s patch.diff ]; then
+            awk 'BEGIN{flag=0} /^```[a-zA-Z]*$/{flag=1; next} /^```[[:space:]]*$/{if(flag){exit} } {if(flag)print}' bedrock_agent_text.txt > patch.diff || true
           fi
+          # 3) 正規化: CRLF を除去し、末尾に改行を付与
+          sed -e 's/\r$//' patch.diff > patch.norm.diff || cp patch.diff patch.norm.diff
+          printf '\n' >> patch.norm.diff
+          bytes=$(wc -c < patch.norm.diff | tr -d ' ')
+          echo "size=$bytes" >> $GITHUB_OUTPUT
+          echo "has_patch=$([ "$bytes" -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
 
       - name: Apply patch (dry-run or real)
         if: ${{ steps.patch.outputs.has_patch == 'true' }}
@@ -185,13 +188,21 @@ jobs:
         run: |
           set -euo pipefail
           echo "--- Patch preview (first 400 lines) ---"
-          head -n 400 patch.diff || true
+          head -n 400 patch.norm.diff || true
           if [ "${{ steps.ctx.outputs.dry }}" = "true" ]; then
             echo "dry_run=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          # 適用（失敗時は終了）
-          git apply --index --whitespace=fix patch.diff
+          # 適用トライ: unidiff-zero → 3way → 失敗
+          if git apply --check --unidiff-zero patch.norm.diff; then
+            git apply --index --unidiff-zero --whitespace=fix patch.norm.diff
+          else
+            echo "primary apply failed -- trying 3-way merge" >&2
+            git apply --index --3way --whitespace=fix patch.norm.diff || {
+              echo 'patch apply failed. See preview above.' >&2
+              exit 128
+            }
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
