@@ -105,7 +105,7 @@ jobs:
             echo
             echo "### 実装指示"
             echo "- 以下のレビュー計画（plan-meta）に基づき、指定されたステップのみを実装してください（未指定なら全ステップ）。"
-            echo "- 変更は統一diff（unified diff）として出力し、```diff で囲むこと。"
+            echo '- 変更は統一diff（unified diff）として出力し、```diff で囲むこと。'
             echo "- 可能なら小さな論理単位で分割し、各パッチに簡潔なコミットメッセージ案を付すこと。"
             echo
             echo "適用モード:"
