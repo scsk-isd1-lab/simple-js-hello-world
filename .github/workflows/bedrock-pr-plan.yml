@@ -32,6 +32,27 @@ jobs:
         )
       }}
     steps:
+      - name: Debug incoming event (issue_comment only)
+        if: ${{ github.event_name == 'issue_comment' }}
+        run: |
+          set -euo pipefail
+          echo "event_name=${{ github.event_name }}"
+          echo "actor=${{ github.actor }}"
+          echo "repo=${{ github.repository }}"
+          echo "issue_number=${{ github.event.issue.number }}"
+          echo "comment_id=${{ github.event.comment.id }}"
+          echo "body<<'EOF'"
+          echo "${{ github.event.comment.body }}"
+          echo "EOF"
+          echo
+          echo "--- raw payload (truncated) ---"
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '.' "$GITHUB_EVENT_PATH" | head -c 120000 || true
+          else
+            head -c 120000 "$GITHUB_EVENT_PATH" || true
+          fi
+          echo
+          echo "--- end payload ---"
       - name: Resolve PR context
         id: prctx
         uses: actions/github-script@v7
