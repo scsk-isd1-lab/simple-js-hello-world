@@ -37,12 +37,133 @@ jobs:
           python3 -c "import boto3; print(f'Boto3 version: {boto3.__version__}')"
           python3 -c "import botocore; print(f'Botocore version: {botocore.__version__}')"
 
+      - name: Build prompt file with PR context
+        run: |
+          set -euo pipefail
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          OUT="scripts/prompts/_runtime_pr_context.md"
+          mkdir -p scripts/prompts
+
+          # 1) Instruction preface (from repository prompt file)
+          if [ -f scripts/prompts/pr_improve_agent_ja.md ]; then
+            cat scripts/prompts/pr_improve_agent_ja.md > "$OUT"
+            echo >> "$OUT"
+          else
+            echo "注意: scripts/prompts/pr_improve_agent_ja.md が見つかりません。PROMPT 環境変数の内容だけで進行します。" > "$OUT"
+            echo >> "$OUT"
+          fi
+
+          # 2) Repository metadata
+          {
+            echo "### 対象リポジトリ情報"
+            echo "- 組織/リポジトリ: ${{ github.repository }}"
+            echo "- PR番号: ${{ github.event.pull_request.number }}"
+            echo "- PR URL: ${{ github.event.pull_request.html_url }}"
+            echo "- ブランチ: ${{ github.event.pull_request.head.ref }} → ${{ github.event.pull_request.base.ref }}"
+            echo "- HEAD SHA: ${HEAD_SHA}"
+            echo
+            echo "### 変更ファイル一覧 (js/html)"
+            git diff --name-status "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html' || true
+            echo
+            echo "### 差分 (unified=0, 上限あり)"
+            echo '```diff'
+            git diff --unified=0 --no-color "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html' | head -c 200000
+            echo
+            echo '```'
+            echo
+            echo "### 変更ファイル本文抜粋 (各 800 行まで, 最大 20 ファイル)"
+            i=0
+            for f in $(git diff --name-only --diff-filter=AM "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html'); do
+              i=$((i+1)); [ $i -gt 20 ] && break
+              echo
+              echo "#### ${f}"
+              echo '```'
+              git show "${HEAD_SHA}:${f}" | head -n 800 || true
+              echo '```'
+            done
+          } >> "$OUT"
+
+          echo "PROMPT_FILE=$OUT" >> "$GITHUB_ENV"
+
+      - name: Append PR description and comments to prompt
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = 'scripts/prompts/_runtime_pr_context.md';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = context.payload.pull_request.number;
+            const pr = context.payload.pull_request;
+
+            const prTitle = pr.title || '';
+            const prBody = pr.body || '';
+            let md = '';
+            md += '\n### PR 詳細\n';
+            md += `- タイトル: ${prTitle}\n`;
+            md += '\n本文:\n\n';
+            md += '```\n' + prBody + '\n```\n';
+
+            // Fetch issue comments (Conversation tab)
+            const issueComments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: prNumber, per_page: 50
+            });
+            if (issueComments.length) {
+              md += '\n### 会話のコメント（抜粋）\n';
+              const slice = issueComments.slice(0, 20);
+              for (const c of slice) {
+                const body = (c.body || '').toString();
+                const trimmed = body.length > 1000 ? body.slice(0, 1000) + '\n...[truncated]...' : body;
+                md += `- ${c.user?.login || 'unknown'} (${c.created_at})\n\n`;
+                md += '```\n' + trimmed + '\n```\n';
+              }
+            }
+
+            // Fetch review comments (code diff inline)
+            const reviewComments = await github.paginate(github.rest.pulls.listReviewComments, {
+              owner, repo, pull_number: prNumber, per_page: 50
+            });
+            if (reviewComments.length) {
+              md += '\n### レビューコメント（コード行）抜粋\n';
+              const slice = reviewComments.slice(0, 20);
+              for (const c of slice) {
+                const body = (c.body || '').toString();
+                const trimmed = body.length > 800 ? body.slice(0, 800) + '\n...[truncated]...' : body;
+                md += `- ${c.user?.login || 'unknown'} (${c.created_at}) in ${c.path}:${c.line || c.original_line || ''}\n\n`;
+                md += '```\n' + trimmed + '\n```\n';
+              }
+            }
+
+            // Fetch reviews (Approve/Comment/Request changes summaries)
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner, repo, pull_number: prNumber, per_page: 50
+            });
+            if (reviews.length) {
+              md += '\n### レビュー提出（サマリー）\n';
+              const slice = reviews.slice(0, 20);
+              for (const r of slice) {
+                const body = (r.body || '').toString();
+                const trimmed = body.length > 800 ? body.slice(0, 800) + '\n...[truncated]...' : body;
+                md += `- ${r.user?.login || 'unknown'} (${r.state}) ${r.submitted_at}\n\n`;
+                md += '```\n' + trimmed + '\n```\n';
+              }
+            }
+
+            fs.appendFileSync(path, '\n' + md, { encoding: 'utf8' });
+
       - name: Invoke Bedrock Agent via Python SDK
         id: bedrock
         env:
           DEBUG_BEDROCK: "1"
+          # 長時間ストリーミングに備えたタイムアウト調整（既定: 読み取り30分）
+          BEDROCK_CONNECT_TIMEOUT: "10"
+          BEDROCK_READ_TIMEOUT: "1800"
+          BEDROCK_MAX_ATTEMPTS: "3"
           AGENT_ID: "HG3FHKX9GY"
           AGENT_ALIAS_ID: "Y7IXOPEHZ2"
+          PROMPT_FILE: ${{ env.PROMPT_FILE }}
           # 対象リポジトリ/PR情報をプロンプトに注入するためのコンテキスト
           REPO_OWNER: ${{ github.repository_owner }}
           REPO_NAME: ${{ github.event.repository.name }}
@@ -52,27 +173,6 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PROMPT: |
-            役割: あなたは司令塔（Coordinator）です。以下の2エージェントに改修依頼を出し、必要な変更をこのリポジトリの当該PRブランチに直接反映させてください。
-            - 設計エージェント: アーキテクチャ/UX/アクセシビリティ/セキュリティ/パフォーマンス/依存/テスト観点から改善点を抽出し、改修方針と根拠を提示。
-            - 実装エージェント: 具体的なコード変更（.js/.html）の実装、不要コード整理、バグ修正、パフォーマンス微調整、Lint/Format適用を担当。
-
-            対象: このPRの差分およびブランチ全体。小さく安全な変更から適用すること。
-
-            実施要件:
-            - 変更はこのジョブ内でファイルへ直接反映する（後続ステップでコミット・プッシュ）。
-            - 変更は論理単位でまとめ、コミットメッセージに目的を簡潔に記す。
-            - セキュリティ/アクセシビリティ/パフォーマンスの退行がないことを重視。
-
-            出力（日本語）:
-            ### 設計エージェント: 改修方針
-            - 目的/影響/根拠
-
-            ### 実装エージェント: 変更点
-            - ファイル別の具体的変更（必要なら行番号）
-
-            ### 完了チェックリスト
-            - Lint/ビルド/表示確認
         run: |
           set -euo pipefail
           python3 scripts/bedrock_invoke_agent.py

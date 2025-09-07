@@ -8,7 +8,8 @@ from typing import List
 
 try:
     import boto3
-    from botocore.exceptions import BotoCoreError, ClientError, UnknownServiceError
+    from botocore.config import Config
+    from botocore.exceptions import BotoCoreError, ClientError, UnknownServiceError, EventStreamError
 except Exception as e:
     print(f"boto3 import error: {e}", file=sys.stderr)
     sys.exit(2)
@@ -116,9 +117,31 @@ def make_session(region: str):
     return boto3.Session(region_name=region)
 
 
+def make_config() -> Config:
+    """Build botocore Config with extended timeouts and retries.
+
+    Env overrides:
+      - BEDROCK_CONNECT_TIMEOUT (sec, default 10)
+      - BEDROCK_READ_TIMEOUT    (sec, default 1800 = 30min)
+      - BEDROCK_MAX_ATTEMPTS    (default 3)
+      - BEDROCK_RETRY_MODE      (default 'standard')
+    """
+    ct = int(os.getenv("BEDROCK_CONNECT_TIMEOUT", "10"))
+    rt = int(os.getenv("BEDROCK_READ_TIMEOUT", "1800"))
+    ma = int(os.getenv("BEDROCK_MAX_ATTEMPTS", "3"))
+    mode = os.getenv("BEDROCK_RETRY_MODE", "standard")
+    if DEBUG:
+        log(f"make_config: connect_timeout={ct}s read_timeout={rt}s max_attempts={ma} mode={mode}")
+    return Config(connect_timeout=ct, read_timeout=rt, retries={"max_attempts": ma, "mode": mode})
+
+
+def make_client(session: boto3.Session, service_name: str):
+    return session.client(service_name, config=make_config())
+
+
 def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
     session = make_session(region)
-    client = session.client("bedrock-agent-runtime")
+    client = make_client(session, "bedrock-agent-runtime")
     session_id = f"{os.getenv('GITHUB_RUN_ID', 'manual')}-{int(time.time())}"
     if DEBUG:
         log(f"invoke_agent: region={region} agent_id={agent_id} alias={agent_alias_id} session_id={session_id}")
@@ -157,24 +180,45 @@ def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
         )
         return json_note, text_note
     chunk_count = 0
-    for event in stream:
-        if "chunk" in event:
-            b = event["chunk"].get("bytes", b"")
-            if isinstance(b, (bytes, bytearray)):
-                parts.append(b.decode("utf-8", errors="ignore"))
+    non_chunk_notes: List[str] = []
+    try:
+        for event in stream:
+            if "chunk" in event:
+                b = event["chunk"].get("bytes", b"")
+                if isinstance(b, (bytes, bytearray)):
+                    parts.append(b.decode("utf-8", errors="ignore"))
+                else:
+                    try:
+                        import base64
+                        parts.append(base64.b64decode(b).decode("utf-8", errors="ignore"))
+                    except Exception:
+                        parts.append(str(b))
+                chunk_count += 1
             else:
+                # Keep a short note for non-chunk events to aid debugging
                 try:
-                    import base64
-                    parts.append(base64.b64decode(b).decode("utf-8", errors="ignore"))
+                    keys = list(event.keys())
                 except Exception:
-                    parts.append(str(b))
-            chunk_count += 1
-        else:
-            if DEBUG:
-                try:
-                    log(f"invoke_agent: non-chunk event keys={list(event.keys())}")
-                except Exception:
-                    pass
+                    keys = []
+                note = f"[non-chunk event] keys={keys}"
+                non_chunk_notes.append(note)
+                if DEBUG:
+                    log(f"invoke_agent: {note}")
+    except EventStreamError as ese:
+        # Surface partial content and error details
+        if DEBUG:
+            log(f"invoke_agent: EventStreamError: {ese}")
+        text_partial = "".join(parts).strip()
+        err_msg = (
+            (text_partial + "\n\n" if text_partial else "") +
+            f"Agentのストリーム処理でエラーが発生しました: {ese}. 後で再試行してください。"
+        )
+        json_err = json.dumps({
+            "error": "EventStreamError",
+            "message": str(ese),
+            "non_chunk_events": non_chunk_notes,
+        }, ensure_ascii=False)
+        return json_err, err_msg
     text = "".join(parts)
     if DEBUG:
         log(f"invoke_agent: received stream chunks={chunk_count} text_len={len(text)}")
@@ -201,7 +245,7 @@ def main():
     if DEBUG:
         try:
             session = make_session(region)
-            sts = session.client("sts")
+            sts = make_client(session, "sts")
             ident = sts.get_caller_identity()
             profile = os.getenv("BEDROCK_AWS_PROFILE") or os.getenv("AWS_PROFILE") or "(default)"
             log(f"env: region={region} agent_id={agent_id} alias={agent_alias_id}")
