@@ -1,4 +1,8 @@
-// Hello World メッセージをコンソールに出力する関数
+/**
+ * Hello World メッセージをコンソールに出力し、APIリクエストを開始する
+ * @public
+ * @returns {void}
+ */
 function displayHelloWorld() {
   console.log('Hello, World!');
   fetchUserData();
@@ -6,8 +10,10 @@ function displayHelloWorld() {
 
 /**
  * APIからユーザーデータを取得する
+ * @public
  * @param {number} userId - 取得するユーザーのID（デフォルト: 1）
  * @returns {Promise<Object|null>} ユーザーデータまたはnull
+ * @throws {Error} APIリクエスト失敗時にエラーをスロー（内部でキャッチされる）
  */
 async function fetchUserData(userId = 1) {
   const apiUrl = `https://jsonplaceholder.typicode.com/users/${userId}`;
@@ -32,6 +38,8 @@ async function fetchUserData(userId = 1) {
 /**
  * APIエラーを処理し、ユーザーに通知する
  * @param {Error} error - 発生したエラー
+ * @private
+ * @returns {void}
  */
 function handleApiError(error) {
   console.error('データ取得中にエラーが発生しました:', error.message);
@@ -47,6 +55,10 @@ function handleApiError(error) {
 /**
  * ユーザー情報を表示する
  * @param {Object} user - ユーザーデータ
+ * @param {string} user.name - ユーザーの名前
+ * @param {string} user.email - ユーザーのメールアドレス
+ * @private
+ * @returns {void}
  */
 function displayUserInfo(user) {
   console.log(`ユーザー情報: ${user.name} (${user.email})`);
