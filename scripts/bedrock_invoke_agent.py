@@ -4,7 +4,7 @@ import sys
 import json
 import time
 import traceback
-from typing import List, Optional
+from typing import List
 
 try:
     import boto3
@@ -43,12 +43,33 @@ def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
     )
     # Collect stream text
     parts: List[str] = []
-    stream = resp.get("responseStream")
+    if DEBUG:
+        try:
+            keys = list(resp.keys())
+            log(f"invoke_agent: response keys={keys}")
+            for k in keys:
+                v = resp.get(k)
+                log(f"invoke_agent: key={k} type={type(v)}")
+        except Exception as e:
+            log(f"invoke_agent: failed to introspect response: {e}")
+    # Some SDKs expose the stream under 'completion' instead of 'responseStream'
+    stream = resp.get("responseStream") or resp.get("completion")
     if stream is None:
         if DEBUG:
             log("invoke_agent: responseStream is None (no streaming content)")
-        # Agent responded without a stream; return empty text (we keep JSON dump separate)
-        return None, ""
+        # Agent responded without a stream; return a small JSON note and human text
+        keys = []
+        try:
+            keys = list(resp.keys())
+        except Exception:
+            pass
+        json_note = json.dumps({"note": "Agent returned no stream", "response_keys": keys}, ensure_ascii=False)
+        text_note = (
+            "Agentのレスポンスにストリームがありませんでした。"
+            f" response_keys={keys}"
+        )
+        return json_note, text_note
+    chunk_count = 0
     for event in stream:
         if "chunk" in event:
             b = event["chunk"].get("bytes", b"")
@@ -60,109 +81,21 @@ def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
                     parts.append(base64.b64decode(b).decode("utf-8", errors="ignore"))
                 except Exception:
                     parts.append(str(b))
+            chunk_count += 1
+        else:
+            if DEBUG:
+                try:
+                    log(f"invoke_agent: non-chunk event keys={list(event.keys())}")
+                except Exception:
+                    pass
     text = "".join(parts)
     if DEBUG:
-        log(f"invoke_agent: received stream chunks={len(parts)} text_len={len(text)}")
+        log(f"invoke_agent: received stream chunks={chunk_count} text_len={len(text)}")
     # We can't JSON-serialize the streaming object directly; return text only
     return None, text
 
 
-def resolve_model_id(region: str, requested: Optional[str]) -> str:
-    """Return a valid model ID for this region. Prefer requested if available; otherwise pick a text generation model."""
-    if requested:
-        # Validate requested exists in region
-        try:
-            bedrock = boto3.client("bedrock", region_name=region)
-            models = bedrock.list_foundation_models()
-            ids = {m.get("modelId") for m in models.get("modelSummaries", [])}
-            if requested in ids:
-                return requested
-            # Some providers version their IDs; accept prefix match
-            for mid in ids:
-                if mid.startswith(requested):
-                    return mid
-        except Exception:
-            # If enumeration fails, attempt with requested as-is
-            return requested
-    # Auto-pick first sensible text model
-    try:
-        bedrock = boto3.client("bedrock", region_name=region)
-        models = bedrock.list_foundation_models()
-        if DEBUG:
-            log(f"resolve_model_id: found {len(models.get('modelSummaries', []))} models in {region}")
-        for m in models.get("modelSummaries", []):
-            if not isinstance(m, dict):
-                continue
-            ins = m.get("inferenceTypesSupported") or []
-            inputs = m.get("inputModalities") or []
-            outputs = m.get("outputModalities") or []
-            if "ON_DEMAND" in ins and "TEXT" in inputs and "TEXT" in outputs:
-                mid = m.get("modelId")
-                if mid:
-                    log(f"resolve_model_id: selected model {mid}")
-                    return mid
-    except Exception as e:
-        log(f"resolve_model_id: failed to list models in {region}: {e}")
-    # Final fallback to a commonly available Titan text model id (may still fail if not available)
-    return requested or "amazon.titan-text-lite-v1"
-
-
-def invoke_model(prompt: str, region: str, model_id: Optional[str]):
-    client = boto3.client("bedrock-runtime", region_name=region)
-    model_to_use = resolve_model_id(region, model_id)
-    if DEBUG:
-        log(f"invoke_model: model_id={model_to_use} region={region}")
-    body = {
-        "inputText": prompt,
-        "textGenerationConfig": {
-            "maxTokenCount": 2048,
-            "temperature": 0.3,
-            "topP": 0.9,
-        },
-    }
-    resp = client.invoke_model(
-        modelId=model_to_use,
-        body=json.dumps(body).encode("utf-8"),
-        accept="application/json",
-        contentType="application/json",
-    )
-    payload = resp.get("body")
-    if hasattr(payload, "read"):
-        raw = payload.read()
-    else:
-        raw = payload or b""
-    if DEBUG:
-        log(f"invoke_model: raw bytes len={len(raw) if raw else 0}")
-    try:
-        data = json.loads(raw.decode("utf-8", errors="ignore"))
-    except Exception:
-        # Return raw string if JSON parsing fails
-        return raw.decode("utf-8", errors="ignore")
-
-    # Try common output shapes
-    txt = None
-    if isinstance(data, dict):
-        if "results" in data and isinstance(data["results"], list) and data["results"]:
-            r0 = data["results"][0]
-            txt = r0.get("outputText") or r0.get("text")
-        if not txt and "generation" in data:
-            txt = data.get("generation")
-        if not txt and "output" in data:
-            txt = data.get("output")
-        if not txt and "completions" in data:
-            comps = data.get("completions")
-            if isinstance(comps, list) and comps:
-                txt = comps[0]
-        if not txt and "content" in data:
-            # anthropic-like format may be nested; do a simple flatten
-            if isinstance(data["content"], list):
-                chunks = []
-                for c in data["content"]:
-                    if isinstance(c, dict) and c.get("type") == "text":
-                        chunks.append(c.get("text") or "")
-                if chunks:
-                    txt = "".join(chunks)
-    return txt or json.dumps(data, ensure_ascii=False)
+# invoke_model および関連の自動モデル解決は不要のため削除
 
 
 def main():
@@ -170,7 +103,6 @@ def main():
     region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
     agent_id = os.getenv("AGENT_ID")
     agent_alias_id = os.getenv("AGENT_ALIAS_ID")
-    model_id = os.getenv("MODEL_ID", "amazon.titan-text-premier-v1:0")
 
     out_json_path = "bedrock_agent_output.json"
     out_text_path = "bedrock_agent_text.txt"
@@ -182,23 +114,24 @@ def main():
         try:
             sts = boto3.client("sts", region_name=region)
             ident = sts.get_caller_identity()
-            log(f"env: region={region} agent_id={agent_id} alias={agent_alias_id} model_id={model_id}")
+            log(f"env: region={region} agent_id={agent_id} alias={agent_alias_id}")
             log(f"sts: account={ident.get('Account')} arn={ident.get('Arn')}")
             log(f"prompt: len={len(prompt)} preview={prompt[:200].replace('\n',' ')}")
         except Exception as e:
             log(f"sts/getenv debug failed: {e}")
 
-    # Prefer agent if parameters available; otherwise go straight to model
+    # Prefer agent; モデル呼び出しへのフォールバックは行わない
     if agent_id and agent_alias_id:
         try:
             json_dump, text = invoke_agent(prompt, region, agent_id, agent_alias_id)
         except (UnknownServiceError, ClientError, BotoCoreError, Exception) as e:
             log(f"invoke_agent failed: {e}\n{traceback.format_exc()}")
-            log("Falling back to invoke_model...")
-            text = None
-
-    if text is None:
-        text = invoke_model(prompt, region, model_id)
+            # Produce human-friendly error text and JSON dump; do not fallback
+            text = f"Agent呼び出しに失敗しました。{e}\n詳細はログを確認してください。"
+            json_dump = json.dumps({"error": str(e), "trace": traceback.format_exc()}, ensure_ascii=False)
+    else:
+        text = "AGENT_ID/AGENT_ALIAS_ID が未設定のため、Agent呼び出しを実行しませんでした。"
+        json_dump = json.dumps({"error": "missing agent parameters"}, ensure_ascii=False)
 
     # Persist outputs
     try:
