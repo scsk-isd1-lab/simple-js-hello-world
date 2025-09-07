@@ -30,13 +30,7 @@ jobs:
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Check AWS CLI and jq
-        run: |
-          set -euo pipefail
-          aws --version
-          jq --version
-
-      - name: Invoke Bedrock Agent via AWS CLI
+      - name: Invoke Bedrock Agent via Python SDK
         id: bedrock
         env:
           AGENT_ID: "HG3FHKX9GY"
@@ -64,8 +58,7 @@ jobs:
             - Lint/ビルド/表示確認
         run: |
           set -euo pipefail
-          chmod +x scripts/bedrock_invoke_agent.sh
-          scripts/bedrock_invoke_agent.sh
+          python scripts/bedrock_invoke_agent.py
 
       - name: Post improve summary as PR comment
         uses: actions/github-script@v7
