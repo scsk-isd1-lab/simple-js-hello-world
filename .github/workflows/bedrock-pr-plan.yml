@@ -19,18 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: >
-      ${{
-        github.event_name == 'pull_request_review' ||
-        (
-          github.event_name == 'issue_comment' &&
-          github.event.issue.pull_request &&
-          (
-            startsWith(github.event.comment.body, '/plan') ||
-            startsWith(github.event.comment.body, '/PLAN')
-          ) &&
-          !contains(github.event.comment.body, '/apply')
-        )
-      }}
+      ${{ github.event_name == 'pull_request_review' || (github.event_name == 'issue_comment' && github.event.issue.pull_request) }}
     steps:
       - name: Debug incoming event (issue_comment only)
         if: ${{ github.event_name == 'issue_comment' }}
@@ -53,7 +42,30 @@ jobs:
           fi
           echo
           echo "--- end payload ---"
+
+      - name: Decide RUN_PLAN from comment
+        if: ${{ github.event_name == 'issue_comment' }}
+        id: decide
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const ev = context.payload;
+            let run = false;
+            if (ev.issue && ev.issue.pull_request) {
+              const body = (ev.comment?.body || '').trim();
+              const lower = body.toLowerCase();
+              run = (lower.startsWith('/plan') && !lower.includes('/apply'));
+            }
+            core.exportVariable('RUN_PLAN', run ? 'true' : 'false');
+            core.setOutput('run', String(run));
+            core.info(`RUN_PLAN=${run}`);
+
+      - name: Force RUN_PLAN true for review events
+        if: ${{ github.event_name == 'pull_request_review' }}
+        run: echo "RUN_PLAN=true" >> "$GITHUB_ENV"
       - name: Resolve PR context
+        if: ${{ env.RUN_PLAN == 'true' }}
         id: prctx
         uses: actions/github-script@v7
         with:
@@ -73,12 +85,14 @@ jobs:
             core.setOutput('base_ref', pr.base.ref);
             core.setOutput('url', pr.html_url);
       - name: Checkout PR head
+        if: ${{ env.RUN_PLAN == 'true' }}
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ steps.prctx.outputs.number }}/head
           fetch-depth: 0
 
       - name: Assume AWS Role using OIDC
+        if: ${{ env.RUN_PLAN == 'true' }}
         uses: aws-actions/configure-aws-credentials@v5.0.0
         with:
           role-to-assume: arn:aws:iam::649844050696:role/isd1-lab-iamrole-github-actions-deploy
@@ -86,6 +100,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Build prompt file with PR context
+        if: ${{ env.RUN_PLAN == 'true' }}
         run: |
           set -euo pipefail
           BASE_REF="${{ steps.prctx.outputs.base_ref }}"
@@ -149,6 +164,7 @@ jobs:
           echo "PROMPT_FILE=$OUT" >> "$GITHUB_ENV"
 
       - name: Append PR description and comments to prompt
+        if: ${{ env.RUN_PLAN == 'true' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -217,6 +233,7 @@ jobs:
             fs.appendFileSync(path, '\n' + md, { encoding: 'utf8' });
 
       - name: Invoke Bedrock Agent via Python SDK (Plan)
+        if: ${{ env.RUN_PLAN == 'true' }}
         id: bedrock
         env:
           DEBUG_BEDROCK: "1"
@@ -242,6 +259,7 @@ jobs:
           python3 scripts/bedrock_invoke_agent.py
 
       - name: Post plan as PR comment (with meta)
+        if: ${{ env.RUN_PLAN == 'true' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
