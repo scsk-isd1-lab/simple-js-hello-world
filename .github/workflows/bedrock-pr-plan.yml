@@ -56,13 +56,27 @@ jobs:
       - name: Build prompt file with PR context
         run: |
           set -euo pipefail
-          BASE_SHA="${{ steps.prctx.outputs.base_ref }}"
+          BASE_REF="${{ steps.prctx.outputs.base_ref }}"
           HEAD_SHA="${{ steps.prctx.outputs.head_sha }}"
+          # Resolve BASE_REF to a commit SHA (prefer remote tracking)
+          if git rev-parse --verify -q "origin/${BASE_REF}" >/dev/null 2>&1; then
+            BASE_SHA=$(git rev-parse "origin/${BASE_REF}")
+          elif git rev-parse --verify -q "${BASE_REF}" >/dev/null 2>&1; then
+            BASE_SHA=$(git rev-parse "${BASE_REF}")
+          else
+            # Fallback: use merge-base between HEAD and its remote base if possible
+            # If merge-base fails, fall back to HEAD (no diff)
+            BASE_SHA=$(git merge-base "${HEAD_SHA}" "origin/${BASE_REF}" 2>/dev/null || echo "${HEAD_SHA}")
+          fi
           OUT="scripts/prompts/_runtime_pr_context.md"
           mkdir -p scripts/prompts
 
-          # 1) Instruction preface (from repository prompt file)
-          if [ -f scripts/prompts/pr_improve_agent_ja.md ]; then
+          # 1) Instruction preface (PLAN prompt)
+          if [ -f scripts/prompts/pr_plan_agent_ja.md ]; then
+            cat scripts/prompts/pr_plan_agent_ja.md > "$OUT"
+            echo >> "$OUT"
+          elif [ -f scripts/prompts/pr_improve_agent_ja.md ]; then
+            # 旧版プロンプトが残っている場合の後方互換
             cat scripts/prompts/pr_improve_agent_ja.md > "$OUT"
             echo >> "$OUT"
           else
