@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import time
+import traceback
 from typing import List, Optional
 
 try:
@@ -11,6 +12,14 @@ try:
 except Exception as e:
     print(f"boto3 import error: {e}", file=sys.stderr)
     sys.exit(2)
+
+
+DEBUG = os.getenv("DEBUG_BEDROCK", "0") not in ("", "0", "false", "False", "OFF")
+
+
+def log(msg: str):
+    sys.stderr.write(f"[bedrock-debug] {msg}\n")
+    sys.stderr.flush()
 
 
 def getenv_required(name: str) -> str:
@@ -24,6 +33,8 @@ def getenv_required(name: str) -> str:
 def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
     client = boto3.client("bedrock-agent-runtime", region_name=region)
     session_id = f"{os.getenv('GITHUB_RUN_ID', 'manual')}-{int(time.time())}"
+    if DEBUG:
+        log(f"invoke_agent: region={region} agent_id={agent_id} alias={agent_alias_id} session_id={session_id}")
     resp = client.invoke_agent(
         agentId=agent_id,
         agentAliasId=agent_alias_id,
@@ -34,6 +45,8 @@ def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
     parts: List[str] = []
     stream = resp.get("responseStream")
     if stream is None:
+        if DEBUG:
+            log("invoke_agent: responseStream is None (no streaming content)")
         # Agent responded without a stream; return empty text (we keep JSON dump separate)
         return None, ""
     for event in stream:
@@ -48,6 +61,8 @@ def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
                 except Exception:
                     parts.append(str(b))
     text = "".join(parts)
+    if DEBUG:
+        log(f"invoke_agent: received stream chunks={len(parts)} text_len={len(text)}")
     # We can't JSON-serialize the streaming object directly; return text only
     return None, text
 
@@ -73,6 +88,8 @@ def resolve_model_id(region: str, requested: Optional[str]) -> str:
     try:
         bedrock = boto3.client("bedrock", region_name=region)
         models = bedrock.list_foundation_models()
+        if DEBUG:
+            log(f"resolve_model_id: found {len(models.get('modelSummaries', []))} models in {region}")
         for m in models.get("modelSummaries", []):
             if not isinstance(m, dict):
                 continue
@@ -82,10 +99,10 @@ def resolve_model_id(region: str, requested: Optional[str]) -> str:
             if "ON_DEMAND" in ins and "TEXT" in inputs and "TEXT" in outputs:
                 mid = m.get("modelId")
                 if mid:
-                    sys.stderr.write(f"Selected model automatically: {mid}\n")
+                    log(f"resolve_model_id: selected model {mid}")
                     return mid
     except Exception as e:
-        sys.stderr.write(f"Failed to list models in {region}: {e}\n")
+        log(f"resolve_model_id: failed to list models in {region}: {e}")
     # Final fallback to a commonly available Titan text model id (may still fail if not available)
     return requested or "amazon.titan-text-lite-v1"
 
@@ -93,7 +110,8 @@ def resolve_model_id(region: str, requested: Optional[str]) -> str:
 def invoke_model(prompt: str, region: str, model_id: Optional[str]):
     client = boto3.client("bedrock-runtime", region_name=region)
     model_to_use = resolve_model_id(region, model_id)
-    sys.stderr.write(f"Invoking model: {model_to_use} in {region}\n")
+    if DEBUG:
+        log(f"invoke_model: model_id={model_to_use} region={region}")
     body = {
         "inputText": prompt,
         "textGenerationConfig": {
@@ -113,6 +131,8 @@ def invoke_model(prompt: str, region: str, model_id: Optional[str]):
         raw = payload.read()
     else:
         raw = payload or b""
+    if DEBUG:
+        log(f"invoke_model: raw bytes len={len(raw) if raw else 0}")
     try:
         data = json.loads(raw.decode("utf-8", errors="ignore"))
     except Exception:
@@ -158,12 +178,23 @@ def main():
     text = None
     json_dump = None
 
+    if DEBUG:
+        try:
+            sts = boto3.client("sts", region_name=region)
+            ident = sts.get_caller_identity()
+            log(f"env: region={region} agent_id={agent_id} alias={agent_alias_id} model_id={model_id}")
+            log(f"sts: account={ident.get('Account')} arn={ident.get('Arn')}")
+            log(f"prompt: len={len(prompt)} preview={prompt[:200].replace('\n',' ')}")
+        except Exception as e:
+            log(f"sts/getenv debug failed: {e}")
+
     # Prefer agent if parameters available; otherwise go straight to model
     if agent_id and agent_alias_id:
         try:
             json_dump, text = invoke_agent(prompt, region, agent_id, agent_alias_id)
         except (UnknownServiceError, ClientError, BotoCoreError, Exception) as e:
-            sys.stderr.write(f"invoke_agent failed: {e}\nFalling back to invoke_model...\n")
+            log(f"invoke_agent failed: {e}\n{traceback.format_exc()}")
+            log("Falling back to invoke_model...")
             text = None
 
     if text is None:
@@ -175,14 +206,20 @@ def main():
             json_dump = json.dumps({"note": "Agent stream not serialized; see text file."}, ensure_ascii=False)
         with open(out_json_path, "w", encoding="utf-8") as f:
             f.write(json_dump)
+        if DEBUG:
+            log(f"wrote {out_json_path} ({len(json_dump)} chars)")
     except Exception as e:
-        sys.stderr.write(f"Failed to write JSON output: {e}\n")
+        log(f"Failed to write JSON output: {e}")
 
     try:
+        if not text or not str(text).strip():
+            text = "Bedrockの出力が空でした。詳細は Actions のログおよび bedrock_agent_output.json を確認してください。"
         with open(out_text_path, "w", encoding="utf-8") as f:
             f.write(text or "")
+        if DEBUG:
+            log(f"wrote {out_text_path} (len={len(text or '')})")
     except Exception as e:
-        sys.stderr.write(f"Failed to write text output: {e}\n")
+        log(f"Failed to write text output: {e}")
 
     return 0
 
