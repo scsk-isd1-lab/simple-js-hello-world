@@ -43,6 +43,15 @@ jobs:
           DEBUG_BEDROCK: "1"
           AGENT_ID: "HG3FHKX9GY"
           AGENT_ALIAS_ID: "Y7IXOPEHZ2"
+          # 対象リポジトリ/PR情報をプロンプトに注入するためのコンテキスト
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          REPO_FULL: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PROMPT: |
             役割: あなたは司令塔（Coordinator）です。以下の2エージェントに改修依頼を出し、必要な変更をこのリポジトリの当該PRブランチに直接反映させてください。
             - 設計エージェント: アーキテクチャ/UX/アクセシビリティ/セキュリティ/パフォーマンス/依存/テスト観点から改善点を抽出し、改修方針と根拠を提示。
