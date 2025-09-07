@@ -3,7 +3,7 @@ import os
 import sys
 import json
 import time
-from typing import List
+from typing import List, Optional
 
 try:
     import boto3
@@ -34,8 +34,8 @@ def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
     parts: List[str] = []
     stream = resp.get("responseStream")
     if stream is None:
-        # Some SDKs may return 'completion' or other fields; fallback to json dump
-        return json.dumps(resp, ensure_ascii=False), ""
+        # Agent responded without a stream; return empty text (we keep JSON dump separate)
+        return None, ""
     for event in stream:
         if "chunk" in event:
             b = event["chunk"].get("bytes", b"")
@@ -52,8 +52,48 @@ def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
     return None, text
 
 
-def invoke_model(prompt: str, region: str, model_id: str):
+def resolve_model_id(region: str, requested: Optional[str]) -> str:
+    """Return a valid model ID for this region. Prefer requested if available; otherwise pick a text generation model."""
+    if requested:
+        # Validate requested exists in region
+        try:
+            bedrock = boto3.client("bedrock", region_name=region)
+            models = bedrock.list_foundation_models()
+            ids = {m.get("modelId") for m in models.get("modelSummaries", [])}
+            if requested in ids:
+                return requested
+            # Some providers version their IDs; accept prefix match
+            for mid in ids:
+                if mid.startswith(requested):
+                    return mid
+        except Exception:
+            # If enumeration fails, attempt with requested as-is
+            return requested
+    # Auto-pick first sensible text model
+    try:
+        bedrock = boto3.client("bedrock", region_name=region)
+        models = bedrock.list_foundation_models()
+        for m in models.get("modelSummaries", []):
+            if not isinstance(m, dict):
+                continue
+            ins = m.get("inferenceTypesSupported") or []
+            inputs = m.get("inputModalities") or []
+            outputs = m.get("outputModalities") or []
+            if "ON_DEMAND" in ins and "TEXT" in inputs and "TEXT" in outputs:
+                mid = m.get("modelId")
+                if mid:
+                    sys.stderr.write(f"Selected model automatically: {mid}\n")
+                    return mid
+    except Exception as e:
+        sys.stderr.write(f"Failed to list models in {region}: {e}\n")
+    # Final fallback to a commonly available Titan text model id (may still fail if not available)
+    return requested or "amazon.titan-text-lite-v1"
+
+
+def invoke_model(prompt: str, region: str, model_id: Optional[str]):
     client = boto3.client("bedrock-runtime", region_name=region)
+    model_to_use = resolve_model_id(region, model_id)
+    sys.stderr.write(f"Invoking model: {model_to_use} in {region}\n")
     body = {
         "inputText": prompt,
         "textGenerationConfig": {
@@ -63,7 +103,7 @@ def invoke_model(prompt: str, region: str, model_id: str):
         },
     }
     resp = client.invoke_model(
-        modelId=model_id,
+        modelId=model_to_use,
         body=json.dumps(body).encode("utf-8"),
         accept="application/json",
         contentType="application/json",
@@ -149,4 +189,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
