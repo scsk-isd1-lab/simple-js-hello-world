@@ -14,9 +14,9 @@ env:
 
 jobs:
   apply:
+    if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, '/apply') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/apply') }}
     steps:
       - name: Resolve PR context + command options
         id: ctx
@@ -105,7 +105,6 @@ jobs:
             echo
             echo "### 実装指示"
             echo "- 以下のレビュー計画（plan-meta）に基づき、指定されたステップのみを実装してください（未指定なら全ステップ）。"
-            echo '- 変更は統一diff（unified diff）として出力し、```diff で囲むこと。'
             echo "- 可能なら小さな論理単位で分割し、各パッチに簡潔なコミットメッセージ案を付すこと。"
             echo
             echo "適用モード:"
@@ -114,6 +113,14 @@ jobs:
           } > "$OUT"
 
           echo "PROMPT_FILE=$OUT" >> "$GITHUB_ENV"
+
+      - name: Upload apply prompt artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-apply-prompt-${{ steps.ctx.outputs.number }}
+          path: scripts/prompts/_runtime_pr_apply.md
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Locate latest plan-meta
         id: plan
@@ -169,15 +176,29 @@ jobs:
         id: patch
         run: |
           set -euo pipefail
-          # 抽出: ```diff ... ``` 最初のブロックを取り出す
+          # 1) 抽出: ```diff … ``` の最初のブロック
           awk 'BEGIN{flag=0} /^```diff/{flag=1; next} /^```/{if(flag){exit} } {if(flag)print}' bedrock_agent_text.txt > patch.diff || true
-          bytes=$(wc -c < patch.diff | tr -d ' ')
-          echo "size=$bytes" >> $GITHUB_OUTPUT
-          if [ "$bytes" -gt 0 ]; then
-            echo "has_patch=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_patch=false" >> $GITHUB_OUTPUT
+          # 2) 代替: 言語指定がない ``` … ``` の最初のブロック
+          if [ ! -s patch.diff ]; then
+            awk 'BEGIN{flag=0} /^```[a-zA-Z]*$/{flag=1; next} /^```[[:space:]]*$/{if(flag){exit} } {if(flag)print}' bedrock_agent_text.txt > patch.diff || true
           fi
+          # 3) 正規化: CRLF 除去 + "\\ No newline at end of file" 行削除 + 末尾に改行
+          sed -e 's/\r$//' -e '/^\\ No newline at end of file$/d' patch.diff > patch.norm.diff || cp patch.diff patch.norm.diff
+          printf '\n' >> patch.norm.diff
+          # 4) サニタイズ: パッチ以外の行を削除（説明文などを除去）
+          awk '/^(diff --git |index |--- |\+\+\+ |@@ |[+\- ]|\\ No newline at end of file$)/ || /^\s*$/{print}' patch.norm.diff > patch.sanitized.diff || true
+          if [ -s patch.sanitized.diff ]; then
+            # 見出し行（--- と +++）が少なくとも1組あることを要求
+            if grep -qE '^--- ' patch.sanitized.diff && grep -qE '^\+\+\+ ' patch.sanitized.diff; then
+              mv patch.sanitized.diff patch.norm.diff
+            else
+              # 見出しが無い断片は適用不能として扱う
+              : > patch.norm.diff
+            fi
+          fi
+          bytes=$(wc -c < patch.norm.diff | tr -d ' ')
+          echo "size=$bytes" >> $GITHUB_OUTPUT
+          echo "has_patch=$([ "$bytes" -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
 
       - name: Apply patch (dry-run or real)
         if: ${{ steps.patch.outputs.has_patch == 'true' }}
@@ -185,13 +206,33 @@ jobs:
         run: |
           set -euo pipefail
           echo "--- Patch preview (first 400 lines) ---"
-          head -n 400 patch.diff || true
+          head -n 400 patch.norm.diff || true
           if [ "${{ steps.ctx.outputs.dry }}" = "true" ]; then
             echo "dry_run=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          # 適用（失敗時は終了）
-          git apply --index --whitespace=fix patch.diff
+          # 適用トライ: unidiff-zero → 3-way → GNU patch（dry-run → 本適用）
+          if git apply --check --unidiff-zero patch.norm.diff; then
+            git apply --index --unidiff-zero --whitespace=fix patch.norm.diff
+          else
+            echo "primary apply failed -- trying 3-way merge" >&2
+            if git apply --check --3way patch.norm.diff; then
+              git apply --index --3way --whitespace=fix patch.norm.diff
+            else
+              echo "3-way merge failed -- trying GNU patch (dry run)" >&2
+              if command -v patch >/dev/null 2>&1; then
+                if patch --dry-run -p1 < patch.norm.diff; then
+                  patch -p1 < patch.norm.diff
+                else
+                  echo 'patch apply failed at all strategies.' >&2
+                  exit 128
+                fi
+              else
+                echo 'patch command not available and git apply strategies failed.' >&2
+                exit 128
+              fi
+            fi
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -213,7 +254,7 @@ jobs:
               try { raw = fs.readFileSync('bedrock_agent_text.txt', 'utf8'); } catch (e) {}
               body = 'パッチが抽出できませんでした。参考出力:\n\n```\n' + (raw.slice(0,60000)) + '\n```';
             } else if (dry) {
-              const snippet = fs.readFileSync('patch.diff', 'utf8').slice(0,60000);
+              const snippet = fs.readFileSync('patch.norm.diff', 'utf8').slice(0,60000);
               body = 'dry-run のため適用せず、パッチを提示します:\n\n```diff\n' + snippet + '\n```';
             } else {
               body = 'パッチを適用し、PRブランチへ push しました。';
@@ -224,3 +265,14 @@ jobs:
               issue_number: Number('${{ steps.ctx.outputs.number }}'),
               body
             });
+
+      - name: Upload patch artifact (for debugging)
+        if: ${{ steps.patch.outputs.has_patch == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-apply-patch-${{ steps.ctx.outputs.number }}
+          path: |
+            patch.diff
+            patch.norm.diff
+          if-no-files-found: warn
+          retention-days: 7
