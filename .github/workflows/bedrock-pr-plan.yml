@@ -14,7 +14,7 @@ env:
 
 jobs:
   plan:
-    if: github.event_name == 'pull_request_review' && startsWith(trim(toLower((github.event.review.body || ''))), '/plan')
+    if: github.event_name == 'pull_request_review' && startsWith(github.event.review.body,'/plan')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
