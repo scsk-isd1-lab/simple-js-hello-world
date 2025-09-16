@@ -1,0 +1,2 @@
+Bedrock Apply テスト用のシンプルなプロンプトです。
+これは act 実行時に PROMPT_FILE から読み込まれます。

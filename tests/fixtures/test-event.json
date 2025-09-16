@@ -1,0 +1,16 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 123,
+    "pull_request": {
+      "url": "https://api.github.com/repos/test/repo/pulls/123"
+    }
+  },
+  "comment": {
+    "body": "/apply"
+  },
+  "repository": {
+    "name": "simple-js-hello-world",
+    "full_name": "test/simple-js-hello-world"
+  }
+}

@@ -32,71 +32,32 @@ def getenv_required(name: str) -> str:
 
 
 def resolve_prompt() -> str:
-    """Resolve prompt from PROMPT_FILE (if set or default exists) else PROMPT env.
+    """Resolve prompt text from PROMPT or PROMPT_FILE."""
+    prompt = os.getenv("PROMPT")
+    if prompt:
+        if DEBUG:
+            log("resolve_prompt: using PROMPT env")
+        return prompt
 
-    - If env PROMPT_FILE is set, read that file.
-    - Else if default file scripts/prompts/pr_improve_agent_ja.md exists, use it.
-    - Else fallback to PROMPT env (required).
-    """
-    # 1) Explicit file via env
-    pfile = os.getenv("PROMPT_FILE")
-    if pfile and os.path.isfile(pfile):
-        if DEBUG:
-            log(f"resolve_prompt: using PROMPT_FILE={pfile}")
-        with open(pfile, "r", encoding="utf-8") as f:
-            return f.read()
-    # 2) Default repo file
-    default_file = os.path.join("scripts", "prompts", "pr_improve_agent_ja.md")
-    if os.path.isfile(default_file):
-        if DEBUG:
-            log(f"resolve_prompt: using default prompt file={default_file}")
-        with open(default_file, "r", encoding="utf-8") as f:
-            return f.read()
-    # 3) Fallback to PROMPT env
+    prompt_file = os.getenv("PROMPT_FILE")
+    if prompt_file:
+        try:
+            with open(prompt_file, "r", encoding="utf-8") as f:
+                data = f.read()
+            if DEBUG:
+                log(f"resolve_prompt: loaded from PROMPT_FILE={prompt_file} len={len(data)}")
+            if data.strip():
+                return data
+            if DEBUG:
+                log("resolve_prompt: PROMPT_FILE content empty")
+        except FileNotFoundError:
+            log(f"resolve_prompt: PROMPT_FILE not found: {prompt_file}")
+        except OSError as e:
+            log(f"resolve_prompt: failed to read PROMPT_FILE {prompt_file}: {e}")
+
     if DEBUG:
-        log("resolve_prompt: falling back to PROMPT env")
+        log("resolve_prompt: neither PROMPT nor valid PROMPT_FILE provided")
     return getenv_required("PROMPT")
-
-
-def append_repo_context(prompt_text: str) -> str:
-    owner = os.getenv("REPO_OWNER")
-    name = os.getenv("REPO_NAME")
-    full = os.getenv("REPO_FULL")
-    pr_number = os.getenv("PR_NUMBER")
-    pr_url = os.getenv("PR_URL")
-    head_ref = os.getenv("HEAD_REF")
-    base_ref = os.getenv("BASE_REF")
-    head_sha = os.getenv("HEAD_SHA")
-
-    # Derive owner/name from full if missing
-    if (not owner or not name) and full and "/" in full:
-        parts = full.split("/", 1)
-        owner = owner or parts[0]
-        name = name or parts[1]
-
-    if DEBUG:
-        log(
-            f"append_repo_context: owner={owner} name={name} pr={pr_number} head_ref={head_ref} base_ref={base_ref} sha={head_sha} url={pr_url}"
-        )
-
-    lines = []
-    if owner or name or pr_number or head_ref or base_ref or head_sha or pr_url:
-        lines.append("\n### 対象リポジトリ情報")
-        if owner or name:
-            repo_disp = f"{owner or '(unknown)'}/{name or '(unknown)'}"
-            lines.append(f"- 組織/リポジトリ: {repo_disp}")
-        if pr_number:
-            lines.append(f"- PR番号: {pr_number}")
-        if pr_url:
-            lines.append(f"- PR URL: {pr_url}")
-        if head_ref and base_ref:
-            lines.append(f"- ブランチ: {head_ref} → {base_ref}")
-        elif head_ref:
-            lines.append(f"- ブランチ: {head_ref}")
-        if head_sha:
-            lines.append(f"- HEAD SHA: {head_sha}")
-
-    return prompt_text + ("\n" + "\n".join(lines) if lines else "")
 
 
 def make_session(region: str):
@@ -232,7 +193,6 @@ def invoke_agent(prompt: str, region: str, agent_id: str, agent_alias_id: str):
 
 def main():
     prompt = resolve_prompt()
-    prompt = append_repo_context(prompt)
     region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
     agent_id = os.getenv("AGENT_ID")
     agent_alias_id = os.getenv("AGENT_ALIAS_ID")
