@@ -18,34 +18,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Resolve PR context + command options
+      - name: Resolve PR context
         id: ctx
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN || env.ACT_GITHUB_TOKEN || 'local-test-token' }}
           script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const num = context.payload.issue.number;
-            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number: num });
-            const cmd = (context.payload.comment.body || '').toString();
-            const dry = /\b(dry-run)\b/i.test(cmd);
-            const steps = (cmd.match(/step\s*:\s*([\d,\s]+)/i)?.[1] || '').split(/\s*,\s*/).filter(Boolean);
-            core.setOutput('number', pr.number.toString());
-            core.setOutput('head_ref', pr.head.ref);
-            core.setOutput('head_sha', pr.head.sha);
-            core.setOutput('base_ref', pr.base.ref);
-            core.setOutput('url', pr.html_url);
-            core.setOutput('dry', String(dry));
-            core.setOutput('steps', steps.join(','));
+            if (process.env.ACT === 'true') {
+              const outputs = {
+                number: process.env.ACT_PR_NUMBER || '123',
+                head_ref: process.env.ACT_PR_HEAD_REF || 'feature-branch',
+                head_sha: process.env.ACT_PR_HEAD_SHA || 'abc123',
+                base_ref: process.env.ACT_PR_BASE_REF || 'main',
+                url: process.env.ACT_PR_URL || 'https://github.com/test/repo/pull/123',
+              };
+              for (const [key, value] of Object.entries(outputs)) {
+                core.setOutput(key, `${value ?? ''}`);
+              }
+              return;
+            }
+            const path = require('path');
+            const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+            const actions = require(path.join(workspace, 'scripts/actions/apply_workflow'));
+            const { resolvePullRequestContext } = actions;
+            await resolvePullRequestContext({ github, context, core });
 
       - name: Checkout PR head
+        if: env.ACT != 'true'
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ steps.ctx.outputs.number }}/head
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN || env.ACT_GITHUB_TOKEN || 'local-test-token' }}
 
       - name: Assume AWS Role using OIDC
+        if: env.ACT != 'true'
         uses: aws-actions/configure-aws-credentials@v5.0.0
         with:
           role-to-assume: arn:aws:iam::649844050696:role/isd1-lab-iamrole-github-actions-deploy
@@ -53,6 +60,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Build prompt file with PR context (Apply)
+        if: env.ACT != 'true'
         run: |
           set -euo pipefail
           BASE_REF="${{ steps.ctx.outputs.base_ref }}"
@@ -114,7 +122,16 @@ jobs:
 
           echo "PROMPT_FILE=$OUT" >> "$GITHUB_ENV"
 
+      - name: Build mock prompt for act
+        if: env.ACT == 'true'
+        run: |
+          mkdir -p scripts/prompts
+          prompt="${ACT_PROMPT_TEXT:-[ACT mock] PR apply test input}" 
+          printf '%s\n' "$prompt" > scripts/prompts/_runtime_pr_apply.md
+          echo "PROMPT_FILE=scripts/prompts/_runtime_pr_apply.md" >> "$GITHUB_ENV"
+
       - name: Upload apply prompt artifact
+        if: env.ACT != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pr-apply-prompt-${{ steps.ctx.outputs.number }}
@@ -123,33 +140,22 @@ jobs:
           retention-days: 7
 
       - name: Locate latest plan-meta
+        if: env.ACT != 'true'
         id: plan
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const num = parseInt('${{ steps.ctx.outputs.number }}', 10);
-            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: num, per_page: 100 });
-            const botNames = new Set(['github-actions[bot]', 'github-actions']);
-            for (let i = comments.length - 1; i >= 0; i--) {
-              const c = comments[i];
-              const body = (c.body || '').toString();
-              if (botNames.has(c.user?.login) && body.includes('```plan-meta')) {
-                const m = body.match(/```plan-meta[\s\S]*?```/);
-                if (m) {
-                  const block = m[0];
-                  // very simple parse
-                  const sid = block.match(/session_id\s*:\s*(.+)/)?.[1]?.trim() || '';
-                  core.setOutput('session_id', sid || `pr-${num}`);
-                  return;
-                }
-              }
-            }
-            core.setOutput('session_id', `pr-${num}`);
+            const { findLatestPlanMeta } = require('./scripts/actions/apply_workflow');
+            await findLatestPlanMeta({
+              github,
+              context,
+              core,
+              issueNumber: parseInt('${{ steps.ctx.outputs.number }}', 10),
+            });
 
       - name: Invoke Bedrock Agent via Python SDK (Apply)
+        if: env.ACT != 'true'
         id: bedrock
         env:
           DEBUG_BEDROCK: "1"
@@ -160,19 +166,12 @@ jobs:
           AGENT_ID: "HG3FHKX9GY"
           AGENT_ALIAS_ID: "Y7IXOPEHZ2"
           PROMPT_FILE: ${{ env.PROMPT_FILE }}
-          REPO_OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
-          REPO_FULL: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.ctx.outputs.number }}
-          PR_URL: ${{ steps.ctx.outputs.url }}
-          HEAD_REF: ${{ steps.ctx.outputs.head_ref }}
-          BASE_REF: ${{ steps.ctx.outputs.base_ref }}
-          HEAD_SHA: ${{ steps.ctx.outputs.head_sha }}
         run: |
           set -euo pipefail
           python3 scripts/bedrock_invoke_agent.py
 
       - name: Extract patch from response
+        if: env.ACT != 'true'
         id: patch
         run: |
           set -euo pipefail
@@ -201,7 +200,7 @@ jobs:
           echo "has_patch=$([ "$bytes" -gt 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
 
       - name: Apply patch (dry-run or real)
-        if: ${{ steps.patch.outputs.has_patch == 'true' }}
+        if: env.ACT != 'true' && steps.patch.outputs.has_patch == 'true'
         id: apply
         run: |
           set -euo pipefail
@@ -241,6 +240,7 @@ jobs:
           echo "dry_run=false" >> $GITHUB_OUTPUT
 
       - name: Comment result to PR
+        if: env.ACT != 'true'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -267,7 +267,7 @@ jobs:
             });
 
       - name: Upload patch artifact (for debugging)
-        if: ${{ steps.patch.outputs.has_patch == 'true' }}
+        if: env.ACT != 'true' && steps.patch.outputs.has_patch == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pr-apply-patch-${{ steps.ctx.outputs.number }}
