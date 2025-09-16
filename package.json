@@ -4,7 +4,13 @@
   "description": "シンプルなJavaScript Hello World実装",
   "main": "app.js",
   "scripts": {
-    "start": "node app.js"
+    "start": "node app.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "act:list": "ACT=true act -l",
+    "act:dry-run": "ACT=true act -n issue_comment -e tests/fixtures/test-event.json --env-file .env.test",
+    "act:test": "ACT=true act issue_comment -e tests/fixtures/test-event.json --env-file .env.test"
   },
   "keywords": [
     "javascript",
@@ -12,5 +18,22 @@
     "node"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1",
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "collectCoverageFrom": [
+      "scripts/**/*.js"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/setup.js"
+    ]
+  }
 }

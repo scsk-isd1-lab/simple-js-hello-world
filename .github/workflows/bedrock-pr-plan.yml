@@ -14,90 +14,36 @@ env:
 
 jobs:
   plan:
-    if: github.event_name == 'pull_request_review' && startsWith(github.event.review.body,'/plan')
+    if: startsWith(github.event.review.body, '/plan')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Debug incoming event (issue_comment only)
-        if: ${{ github.event_name == 'issue_comment' }}
-        run: |
-          set -euo pipefail
-          echo "event_name=${{ github.event_name }}"
-          echo "actor=${{ github.actor }}"
-          echo "repo=${{ github.repository }}"
-          echo "issue_number=${{ github.event.issue.number }}"
-          echo "comment_id=${{ github.event.comment.id }}"
-          echo "body<<'EOF'"
-          echo "${{ github.event.comment.body }}"
-          echo "EOF"
-          echo
-          echo "--- raw payload (truncated) ---"
-          if command -v jq >/dev/null 2>&1; then
-            jq -r '.' "$GITHUB_EVENT_PATH" | head -c 120000 || true
-          else
-            head -c 120000 "$GITHUB_EVENT_PATH" || true
-          fi
-          echo
-          echo "--- end payload ---"
-
-      - name: Decide RUN_PLAN from comment
-        if: ${{ github.event_name == 'issue_comment' }}
-        id: decide
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const ev = context.payload;
-            let run = false;
-            if (ev.issue && ev.issue.pull_request) {
-              const body = (ev.comment?.body || '').trim();
-              const lower = body.toLowerCase();
-              run = (lower.startsWith('/plan') && !lower.includes('/apply'));
-            }
-            core.exportVariable('RUN_PLAN', run ? 'true' : 'false');
-            core.setOutput('run', String(run));
-            core.info(`RUN_PLAN=${run}`);
-
-      - name: Force RUN_PLAN true for review events
-        if: ${{ github.event_name == 'pull_request_review' }}
-        run: echo "RUN_PLAN=true" >> "$GITHUB_ENV"
       - name: Resolve PR context
-        if: ${{ env.RUN_PLAN == 'true' }}
         id: prctx
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            let pr = context.payload.pull_request;
-            if (!pr && context.payload.issue && context.payload.issue.number) {
-              const num = context.payload.issue.number;
-              const { data } = await github.rest.pulls.get({ owner, repo, pull_number: num });
-              pr = data;
-            }
+            const pr = context.payload.pull_request;
             core.setOutput('number', pr.number.toString());
             core.setOutput('head_ref', pr.head.ref);
             core.setOutput('head_sha', pr.head.sha);
             core.setOutput('base_ref', pr.base.ref);
             core.setOutput('url', pr.html_url);
       - name: Checkout PR head
-        if: ${{ env.RUN_PLAN == 'true' }}
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ steps.prctx.outputs.number }}/head
           fetch-depth: 0
 
       - name: Assume AWS Role using OIDC
-        if: ${{ env.RUN_PLAN == 'true' }}
         uses: aws-actions/configure-aws-credentials@v5.0.0
         with:
           role-to-assume: arn:aws:iam::649844050696:role/isd1-lab-iamrole-github-actions-deploy
           role-session-name: GitHub_to_AWS_via_FederatedOIDC
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Build prompt file with PR context
-        if: ${{ env.RUN_PLAN == 'true' }}
+      - name: Build prompt file with PR context (debug only)
         run: |
           set -euo pipefail
           BASE_REF="${{ steps.prctx.outputs.base_ref }}"
@@ -115,19 +61,6 @@ jobs:
           OUT="scripts/prompts/_runtime_pr_context.md"
           mkdir -p scripts/prompts
 
-          # 1) Instruction preface (PLAN prompt)
-          if [ -f scripts/prompts/pr_plan_agent_ja.md ]; then
-            cat scripts/prompts/pr_plan_agent_ja.md > "$OUT"
-            echo >> "$OUT"
-          elif [ -f scripts/prompts/pr_improve_agent_ja.md ]; then
-            # 旧版プロンプトが残っている場合の後方互換
-            cat scripts/prompts/pr_improve_agent_ja.md > "$OUT"
-            echo >> "$OUT"
-          else
-            echo "注意: scripts/prompts/pr_improve_agent_ja.md が見つかりません。PROMPT 環境変数の内容だけで進行します。" > "$OUT"
-            echo >> "$OUT"
-          fi
-
           # 2) Repository metadata
           {
             echo "### 対象リポジトリ情報"
@@ -137,18 +70,18 @@ jobs:
             echo "- ブランチ: ${{ steps.prctx.outputs.head_ref }} → ${{ steps.prctx.outputs.base_ref }}"
             echo "- HEAD SHA: ${HEAD_SHA}"
             echo
-            echo "### 変更ファイル一覧 (js/html)"
-            git diff --name-status "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html' || true
+            echo "### 変更ファイル一覧"
+            git diff --name-status "${BASE_SHA}" "${HEAD_SHA}" || true
             echo
             echo "### 差分 (unified=0, 上限あり)"
             echo '```diff'
-            git diff --unified=0 --no-color "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html' | head -c 200000
+            git diff --unified=0 --no-color "${BASE_SHA}" "${HEAD_SHA}" | head -c 200000
             echo
             echo '```'
             echo
             echo "### 変更ファイル本文抜粋 (各 800 行まで, 最大 20 ファイル)"
             i=0
-            for f in $(git diff --name-only --diff-filter=AM "${BASE_SHA}" "${HEAD_SHA}" -- '*.js' '*.html'); do
+            for f in $(git diff --name-only --diff-filter=AM "${BASE_SHA}" "${HEAD_SHA}"); do
               i=$((i+1)); [ $i -gt 20 ] && break
               echo
               echo "#### ${f}"
@@ -158,10 +91,15 @@ jobs:
             done
           } >> "$OUT"
 
-          echo "PROMPT_FILE=$OUT" >> "$GITHUB_ENV"
+      - name: Upload plan prompt artifact (debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-plan-prompt-${{ steps.prctx.outputs.number }}
+          path: scripts/prompts/_runtime_pr_context.md
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Append PR description and comments to prompt
-        if: ${{ env.RUN_PLAN == 'true' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -230,7 +168,6 @@ jobs:
             fs.appendFileSync(path, '\n' + md, { encoding: 'utf8' });
 
       - name: Invoke Bedrock Agent via Python SDK (Plan)
-        if: ${{ env.RUN_PLAN == 'true' }}
         id: bedrock
         env:
           DEBUG_BEDROCK: "1"
@@ -241,22 +178,13 @@ jobs:
           BEDROCK_MAX_ATTEMPTS: "3"
           AGENT_ID: "HG3FHKX9GY"
           AGENT_ALIAS_ID: "Y7IXOPEHZ2"
-          PROMPT_FILE: ${{ env.PROMPT_FILE }}
-          # 対象リポジトリ/PR情報をプロンプトに注入するためのコンテキスト
-          REPO_OWNER: ${{ github.repository_owner }}
-          REPO_NAME: ${{ github.event.repository.name }}
-          REPO_FULL: ${{ github.repository }}
-          PR_NUMBER: ${{ steps.prctx.outputs.number }}
-          PR_URL: ${{ steps.prctx.outputs.url }}
-          HEAD_REF: ${{ steps.prctx.outputs.head_ref }}
-          BASE_REF: ${{ steps.prctx.outputs.base_ref }}
-          HEAD_SHA: ${{ steps.prctx.outputs.head_sha }}
+          # PROMPT_FILE は使用せず、最小のインプットのみ渡す（Agentのシステムプロンプトに委任）
+          PROMPT: "このPRのレビュー計画（plan）を日本語で作成してください。必要に応じてPRのURL/番号から文脈を取得してください。"
         run: |
           set -euo pipefail
           python3 scripts/bedrock_invoke_agent.py
 
       - name: Post plan as PR comment (with meta)
-        if: ${{ env.RUN_PLAN == 'true' }}
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
