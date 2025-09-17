@@ -178,8 +178,9 @@ jobs:
           BEDROCK_MAX_ATTEMPTS: "3"
           AGENT_ID: "HG3FHKX9GY"
           AGENT_ALIAS_ID: "Y7IXOPEHZ2"
-          # PROMPT_FILE は使用せず、最小のインプットのみ渡す（Agentのシステムプロンプトに委任）
+          # 手動指示と生成したコンテキストをまとめて渡す
           PROMPT: "このPRのレビュー計画（plan）を日本語で作成してください。必要に応じてPRのURL/番号から文脈を取得してください。"
+          PROMPT_FILE: scripts/prompts/_runtime_pr_context.md
         run: |
           set -euo pipefail
           python3 scripts/bedrock_invoke_agent.py
