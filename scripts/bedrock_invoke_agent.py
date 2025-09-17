@@ -40,7 +40,9 @@ def resolve_prompt() -> str:
     if prompt_env:
         if DEBUG:
             log("resolve_prompt: using PROMPT env")
-        parts.append(prompt_env)
+        prompt_env = prompt_env.strip()
+        if prompt_env:
+            parts.append(prompt_env)
 
     if prompt_file:
         try:
@@ -48,8 +50,9 @@ def resolve_prompt() -> str:
                 data = f.read()
             if DEBUG:
                 log(f"resolve_prompt: loaded from PROMPT_FILE={prompt_file} len={len(data)}")
-            if data.strip():
-                parts.append(data)
+            data = data.strip()
+            if data:
+                parts.append("### PRコンテキスト\n" + data)
             elif DEBUG:
                 log("resolve_prompt: PROMPT_FILE content empty")
         except FileNotFoundError:
@@ -58,7 +61,10 @@ def resolve_prompt() -> str:
             log(f"resolve_prompt: failed to read PROMPT_FILE {prompt_file}: {e}")
 
     if parts:
-        return "\n\n".join(parts)
+        combined = "\n\n".join(parts).strip()
+        if DEBUG:
+            log(f"resolve_prompt: combined_len={len(combined)}")
+        return combined
 
     if DEBUG:
         log("resolve_prompt: neither PROMPT nor valid PROMPT_FILE provided")
