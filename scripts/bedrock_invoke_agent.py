@@ -32,14 +32,16 @@ def getenv_required(name: str) -> str:
 
 
 def resolve_prompt() -> str:
-    """Resolve prompt text from PROMPT or PROMPT_FILE."""
-    prompt = os.getenv("PROMPT")
-    if prompt:
+    """Resolve prompt text by combining PROMPT and PROMPT_FILE when present."""
+    prompt_env = os.getenv("PROMPT")
+    prompt_file = os.getenv("PROMPT_FILE")
+    parts: List[str] = []
+
+    if prompt_env:
         if DEBUG:
             log("resolve_prompt: using PROMPT env")
-        return prompt
+        parts.append(prompt_env)
 
-    prompt_file = os.getenv("PROMPT_FILE")
     if prompt_file:
         try:
             with open(prompt_file, "r", encoding="utf-8") as f:
@@ -47,13 +49,16 @@ def resolve_prompt() -> str:
             if DEBUG:
                 log(f"resolve_prompt: loaded from PROMPT_FILE={prompt_file} len={len(data)}")
             if data.strip():
-                return data
-            if DEBUG:
+                parts.append(data)
+            elif DEBUG:
                 log("resolve_prompt: PROMPT_FILE content empty")
         except FileNotFoundError:
             log(f"resolve_prompt: PROMPT_FILE not found: {prompt_file}")
         except OSError as e:
             log(f"resolve_prompt: failed to read PROMPT_FILE {prompt_file}: {e}")
+
+    if parts:
+        return "\n\n".join(parts)
 
     if DEBUG:
         log("resolve_prompt: neither PROMPT nor valid PROMPT_FILE provided")
