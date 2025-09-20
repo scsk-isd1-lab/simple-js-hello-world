@@ -58,8 +58,8 @@ jobs:
             # If merge-base fails, fall back to HEAD (no diff)
             BASE_SHA=$(git merge-base "${HEAD_SHA}" "origin/${BASE_REF}" 2>/dev/null || echo "${HEAD_SHA}")
           fi
-          OUT="scripts/prompts/_runtime_pr_context.md"
-          mkdir -p scripts/prompts
+          OUT=".github/scripts/prompts/_runtime_pr_context.md"
+          mkdir -p .github/scripts/prompts
 
           # 2) Repository metadata
           {
@@ -95,7 +95,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pr-plan-prompt-${{ steps.prctx.outputs.number }}
-          path: scripts/prompts/_runtime_pr_context.md
+          path: .github/scripts/prompts/_runtime_pr_context.md
           if-no-files-found: error
           retention-days: 7
 
@@ -105,7 +105,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const path = 'scripts/prompts/_runtime_pr_context.md';
+            const path = '.github/scripts/prompts/_runtime_pr_context.md';
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             let prNumber = '${{ steps.prctx.outputs.number }}';
@@ -180,10 +180,10 @@ jobs:
           AGENT_ALIAS_ID: "Y7IXOPEHZ2"
           # 手動指示と生成したコンテキストをまとめて渡す
           PROMPT: "このPRのレビュー計画（plan）を日本語で作成してください。必要に応じてPRのURL/番号から文脈を取得してください。"
-          PROMPT_FILE: scripts/prompts/_runtime_pr_context.md
+          PROMPT_FILE: .github/scripts/prompts/_runtime_pr_context.md
         run: |
           set -euo pipefail
-          python3 scripts/bedrock_invoke_agent.py
+          python3 .github/scripts/bedrock_invoke_agent.py
 
       - name: Post plan as PR comment (with meta)
         uses: actions/github-script@v7

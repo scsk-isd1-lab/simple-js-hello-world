@@ -1,7 +1,7 @@
 const {
   resolvePullRequestContext,
   findLatestPlanMeta,
-} = require('../../scripts/actions/apply_workflow');
+} = require('../../.github/scripts/actions/apply_workflow');
 
 describe('resolvePullRequestContext', () => {
   test('sets outputs based on pull request data', async () => {
