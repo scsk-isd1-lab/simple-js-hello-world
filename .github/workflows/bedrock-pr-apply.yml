@@ -18,6 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Checkout repository snapshot
+        if: env.ACT != 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN || env.ACT_GITHUB_TOKEN || 'local-test-token' }}
       - name: Resolve PR context
         id: ctx
         uses: actions/github-script@v7
@@ -39,7 +45,7 @@ jobs:
             }
             const path = require('path');
             const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-            const actions = require(path.join(workspace, 'scripts/actions/apply_workflow'));
+            const actions = require(path.join(workspace, '.github/scripts/actions/apply_workflow'));
             const { resolvePullRequestContext } = actions;
             await resolvePullRequestContext({ github, context, core });
 
@@ -70,16 +76,16 @@ jobs:
           else
             BASE_SHA=$(git merge-base "origin/${BASE_REF}" "${HEAD_SHA}" || echo "${HEAD_SHA}")
           fi
-          OUT="scripts/prompts/_runtime_pr_apply.md"
-          mkdir -p scripts/prompts
+          OUT=".github/scripts/prompts/_runtime_pr_apply.md"
+          mkdir -p .github/scripts/prompts
 
           # 1) Instruction preface (APPLY prompt)
-          if [ -f scripts/prompts/pr_apply_agent_ja.md ]; then
-            cat scripts/prompts/pr_apply_agent_ja.md > "$OUT"
+          if [ -f .github/scripts/prompts/pr_apply_agent_ja.md ]; then
+            cat .github/scripts/prompts/pr_apply_agent_ja.md > "$OUT"
             echo >> "$OUT"
-          elif [ -f scripts/prompts/pr_improve_agent_ja.md ]; then
+          elif [ -f .github/scripts/prompts/pr_improve_agent_ja.md ]; then
             # 旧版プロンプトを暫定利用
-            cat scripts/prompts/pr_improve_agent_ja.md > "$OUT"
+            cat .github/scripts/prompts/pr_improve_agent_ja.md > "$OUT"
             echo >> "$OUT"
           fi
 
@@ -125,17 +131,17 @@ jobs:
       - name: Build mock prompt for act
         if: env.ACT == 'true'
         run: |
-          mkdir -p scripts/prompts
+          mkdir -p .github/scripts/prompts
           prompt="${ACT_PROMPT_TEXT:-[ACT mock] PR apply test input}" 
-          printf '%s\n' "$prompt" > scripts/prompts/_runtime_pr_apply.md
-          echo "PROMPT_FILE=scripts/prompts/_runtime_pr_apply.md" >> "$GITHUB_ENV"
+          printf '%s\n' "$prompt" > .github/scripts/prompts/_runtime_pr_apply.md
+          echo "PROMPT_FILE=.github/scripts/prompts/_runtime_pr_apply.md" >> "$GITHUB_ENV"
 
       - name: Upload apply prompt artifact
         if: env.ACT != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: pr-apply-prompt-${{ steps.ctx.outputs.number }}
-          path: scripts/prompts/_runtime_pr_apply.md
+          path: .github/scripts/prompts/_runtime_pr_apply.md
           if-no-files-found: error
           retention-days: 7
 
@@ -146,7 +152,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const { findLatestPlanMeta } = require('./scripts/actions/apply_workflow');
+            const path = require('path');
+            const { findLatestPlanMeta } = require(path.join(process.cwd(), '.github/scripts/actions/apply_workflow'));
             await findLatestPlanMeta({
               github,
               context,
@@ -168,7 +175,7 @@ jobs:
           PROMPT_FILE: ${{ env.PROMPT_FILE }}
         run: |
           set -euo pipefail
-          python3 scripts/bedrock_invoke_agent.py
+          python3 .github/scripts/bedrock_invoke_agent.py
 
       - name: Extract patch from response
         if: env.ACT != 'true'
