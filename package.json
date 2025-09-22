@@ -30,7 +30,7 @@
       "**/tests/**/*.test.js"
     ],
     "collectCoverageFrom": [
-      "scripts/**/*.js"
+      ".github/scripts/**/*.js"
     ],
     "setupFilesAfterEnv": [
       "<rootDir>/tests/setup.js"
